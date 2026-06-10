@@ -15,7 +15,7 @@ as later stages come online, auto-updated by the hooks/distiller loop.
 > automatically.
 
 ## Architecture
-- (to be populated as stages land) — see `architecture/`
+- [[architecture/mount-set]] — what a session can see (ramet + member roots)
 
 ## Conventions
 - [[conventions/note-granularity]] — one note = one atomic fact
