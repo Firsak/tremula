@@ -9,11 +9,14 @@ drive distillation with a deterministic fake instead of a live model.
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
+import time
+from pathlib import Path
 from typing import Protocol
 
-from .config import ProviderConfig
+from .config import HOOKS_DISABLED_ENV, ProviderConfig
 from .vault import VaultService
 
 HYGIENE = """\
@@ -61,8 +64,14 @@ class ClaudeCliProvider:
         cmd = ["claude", "-p", "--output-format", "text"]
         if self.model:
             cmd += ["--model", self.model]
+        # ALWAYS mute Tremula hooks inside the headless claude: it inherits cwd
+        # and would otherwise fire this project's hooks itself — the second leg
+        # of the fork bomb, regardless of who invoked the provider (distiller,
+        # live tests, future callers).
+        env = {**os.environ, HOOKS_DISABLED_ENV: "1"}
         result = subprocess.run(
-            cmd, input=prompt, capture_output=True, text=True, timeout=self.timeout
+            cmd, input=prompt, capture_output=True, text=True,
+            timeout=self.timeout, env=env,
         )
         if result.returncode != 0:
             raise RuntimeError(f"claude -p failed: {result.stderr.strip()}")
@@ -91,8 +100,6 @@ def provider_from_config(cfg: ProviderConfig) -> Provider:
     if cfg.kind == "claude-cli":
         return ClaudeCliProvider(model=cfg.model)
     if cfg.kind == "anthropic":
-        import os
-
         key = os.environ.get(cfg.auth_env)
         if not key:
             raise RuntimeError(f"{cfg.auth_env} is unset; cannot use the anthropic provider")
@@ -100,8 +107,25 @@ def provider_from_config(cfg: ProviderConfig) -> Provider:
     raise ValueError(f"unknown provider kind: {cfg.kind!r}")
 
 
-def build_prompt(events: list[dict], existing_notes: list[dict] | None = None) -> str:
-    transcript = json.dumps(events, ensure_ascii=False, indent=0)
+def build_prompt(
+    events: list[dict],
+    existing_notes: list[dict] | None = None,
+    budget: int = 24000,
+) -> str:
+    # Keep the most recent events within the char budget; old ones age out.
+    kept: list[str] = []
+    used = 0
+    for event in reversed(events):
+        line = json.dumps(event, ensure_ascii=False)
+        if kept and used + len(line) > budget:
+            break
+        kept.append(line)
+        used += len(line)
+    kept.reverse()
+    omitted = len(events) - len(kept)
+    header = f"({omitted} earlier events omitted)\n" if omitted else ""
+    transcript = header + "\n".join(kept)
+
     existing_block = ""
     if existing_notes:
         existing_block = "EXISTING NOTES (revise by reusing the exact title):\n" + \
@@ -148,7 +172,9 @@ def parse_ops(text: str) -> list[dict]:
 
 
 def _significant_words(text: str) -> set[str]:
-    return set(re.findall(r"[a-zA-Z0-9_]{3,}", text.lower()))
+    # \w is Unicode-aware: the backstop must hold for non-Latin note bodies too
+    # (an ASCII-only pattern would see zero words and vacuously pass).
+    return set(re.findall(r"\w{3,}", text.lower()))
 
 
 def content_preserved(original: str, merged: str, threshold: float = 0.85) -> bool:
@@ -191,7 +217,8 @@ def _apply_write(vault: VaultService, op: dict, provider: Provider | None,
     if provider is None:
         applied.append(f"skip write {uri}: manual note, no judge available")
         return
-    original = vault.read_note(uri)["body"]
+    original_note = vault.read_note(uri)
+    original = original_note["body"]
     verdict = judge_enrichment(provider, original, content)
     if verdict.get("decision") != "enrich":
         applied.append(f"skip enrich {uri}: {verdict.get('reason', 'rejected')}")
@@ -200,9 +227,20 @@ def _apply_write(vault: VaultService, op: dict, provider: Provider | None,
     if not content_preserved(original, merged):
         applied.append(f"skip enrich {uri}: backstop blocked content loss")
         return
-    # Apply the judged merge; the note stays human-owned (source=manual).
-    vault.write_note(title=title, content=merged, type=type_, scope=scope,
-                     links=links, source="manual", protect=False)
+    # Apply the judged merge. The note stays human-owned (source=manual) and
+    # keeps its original type/scope and frontmatter links — enrichment adds,
+    # it never strips metadata. Proposed links are unioned in.
+    merged_links = {rel: list(targets) for rel, targets in original_note["links"].items()}
+    for rel, targets in (links or {}).items():
+        bucket = merged_links.setdefault(rel, [])
+        for target in targets:
+            if target not in bucket:
+                bucket.append(target)
+    vault.write_note(
+        title=title, content=merged,
+        type=original_note["type"], scope=original_note["scope"],
+        links=merged_links, source="manual", protect=False,
+    )
     applied.append(f"enrich {uri}: {verdict.get('reason', '')}".rstrip())
 
 
@@ -228,11 +266,129 @@ def apply_ops(vault: VaultService, ops: list[dict], provider: Provider | None = 
     return applied
 
 
-def distill(events: list[dict], vault: VaultService, provider: Provider) -> list[str]:
+def distill(events: list[dict], vault: VaultService, provider: Provider,
+            prompt_budget: int = 24000) -> list[str]:
     """Run one distillation pass: events -> LLM -> applied note operations."""
     if not events:
         return []
     existing = vault.existing_notes()
-    response = provider.complete(build_prompt(events, existing))
+    response = provider.complete(build_prompt(events, existing, budget=prompt_budget))
     ops = parse_ops(response)
     return apply_ops(vault, ops, provider=provider)
+
+
+# ---- incremental scheduling --------------------------------------------------
+#
+# Claude Code fires Stop after EVERY assistant turn. Distilling the whole
+# session on each turn would mean one claude -p call per turn, overlapping runs,
+# and re-distilling the same events repeatedly. Three mechanisms bound it:
+# a byte-offset sidecar (each run consumes only NEW events), a pid lockfile
+# (never two distillers per session), and a minimum interval for Stop
+# (PreCompact/SessionEnd flush regardless of the interval).
+
+FLUSH_TRIGGERS = {"PreCompact", "SessionEnd"}
+
+
+def _state_path(session_file: str | Path) -> Path:
+    return Path(session_file).with_suffix(".distill.json")
+
+
+def _lock_path(session_file: str | Path) -> Path:
+    return Path(session_file).with_suffix(".distill.lock")
+
+
+def load_distill_state(session_file: str | Path) -> dict:
+    try:
+        return json.loads(_state_path(session_file).read_text())
+    except (OSError, json.JSONDecodeError):
+        return {"offset": 0, "last_run": 0.0}
+
+
+def save_distill_state(session_file: str | Path, offset: int, last_run: float) -> None:
+    _state_path(session_file).write_text(
+        json.dumps({"offset": offset, "last_run": last_run})
+    )
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except (ProcessLookupError, PermissionError, ValueError):
+        return False
+
+
+def acquire_lock(session_file: str | Path) -> bool:
+    """Take the per-session distill lock; break it only if the holder is dead."""
+    lock = _lock_path(session_file)
+    for _ in range(2):
+        try:
+            fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.write(fd, str(os.getpid()).encode())
+            os.close(fd)
+            return True
+        except FileExistsError:
+            try:
+                holder = int(lock.read_text().strip() or "0")
+            except (OSError, ValueError):
+                holder = 0
+            if holder and _pid_alive(holder):
+                return False
+            lock.unlink(missing_ok=True)  # stale lock from a dead process
+    return False
+
+
+def release_lock(session_file: str | Path) -> None:
+    _lock_path(session_file).unlink(missing_ok=True)
+
+
+def should_distill(
+    session_file: str | Path,
+    trigger: str = "Stop",
+    min_interval: float = 600.0,
+    now: float | None = None,
+) -> tuple[bool, str]:
+    """Cheap hook-side decision: is spawning a distiller worth a process?"""
+    path = Path(session_file)
+    if not path.exists():
+        return False, "no session file"
+    state = load_distill_state(session_file)
+    if path.stat().st_size <= state.get("offset", 0):
+        return False, "no new events"
+    lock = _lock_path(session_file)
+    if lock.exists():
+        try:
+            holder = int(lock.read_text().strip() or "0")
+        except (OSError, ValueError):
+            holder = 0
+        if holder and _pid_alive(holder):
+            return False, "distill already in flight"
+    if trigger not in FLUSH_TRIGGERS:
+        now = time.time() if now is None else now
+        if now - state.get("last_run", 0.0) < min_interval:
+            return False, "debounced (min interval not reached)"
+    return True, "ok"
+
+
+def run_distill(
+    session_file: str | Path,
+    vault: VaultService,
+    provider: Provider,
+    trigger: str = "Stop",
+    prompt_budget: int = 24000,
+) -> list[str]:
+    """Worker entry: lock, consume new events from the offset, distill, advance."""
+    from .capture import read_session_since  # local import to avoid a cycle
+
+    if not acquire_lock(session_file):
+        return ["skip: distill already in flight"]
+    try:
+        state = load_distill_state(session_file)
+        events, new_offset = read_session_since(session_file, state.get("offset", 0))
+        if not events:
+            return []
+        applied = distill(events, vault, provider, prompt_budget=prompt_budget)
+        save_distill_state(session_file, offset=new_offset, last_run=time.time())
+        return applied
+    finally:
+        release_lock(session_file)

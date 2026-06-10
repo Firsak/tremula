@@ -15,9 +15,8 @@ from pathlib import Path
 import yaml
 
 from . import __version__
-from .capture import read_session
 from .config import index_path, load_settings
-from .distiller import distill, provider_from_config
+from .distiller import provider_from_config, run_distill
 from .hooks import run_hook
 from .index import Index
 from .note import load_note_in_vault
@@ -143,19 +142,26 @@ def _cmd_index(args: argparse.Namespace) -> int:
 
 
 def _cmd_distill(args: argparse.Namespace) -> int:
-    """Distill a captured session into notes (invoked detached by the Stop hook)."""
+    """Distill a captured session into notes (invoked detached by the Stop hook).
+
+    Incremental: consumes only events appended since the last run (byte-offset
+    sidecar), under a per-session lock so runs never overlap.
+    """
     try:
         registry = load_registry()
         if args.project not in registry.projects:
             print(f"unknown project {args.project!r}", file=sys.stderr)
             return 1
+        settings = load_settings()
         mounts = registry.mount_set(args.project)
         index = Index(index_path(args.project))
         index.rebuild(mounts)
         vault = VaultService(mounts, index, project=args.project)
-        provider = provider_from_config(load_settings().provider)
-        events = read_session(args.session_file)
-        applied = distill(events, vault, provider)
+        provider = provider_from_config(settings.provider)
+        applied = run_distill(
+            args.session_file, vault, provider,
+            trigger=args.trigger, prompt_budget=settings.distill_prompt_budget,
+        )
     except Exception as exc:  # detached process: log to stderr, never crash a session
         print(f"distill error: {exc}", file=sys.stderr)
         return 1
@@ -197,6 +203,8 @@ def build_parser() -> argparse.ArgumentParser:
     distill_p = sub.add_parser("distill", help="distill a captured session into notes")
     distill_p.add_argument("session_file", help="path to the session NDJSON file")
     distill_p.add_argument("--project", required=True, help="project key to distill into")
+    distill_p.add_argument("--trigger", default="Stop",
+                           help="hook event that triggered this run (Stop/PreCompact/SessionEnd)")
     distill_p.set_defaults(func=_cmd_distill)
 
     return parser

@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import frontmatter
+
 from .config import Settings
 from .index import Index
 
@@ -27,7 +29,9 @@ def build_injection(
     parts: list[str] = []
     index_md = Path(mounts[project]) / "_index.md"
     if index_md.exists():
-        parts.append(index_md.read_text(encoding="utf-8").strip())
+        # Inject the body only — YAML frontmatter is vault plumbing, not context.
+        post = frontmatter.loads(index_md.read_text(encoding="utf-8"))
+        parts.append(post.content.strip())
 
     # Hot notes: most recently modified, excluding the index itself.
     hot = [r for r in index.all_notes() if not r["uri"].endswith("/_index")]

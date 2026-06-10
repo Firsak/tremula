@@ -63,6 +63,11 @@ class Settings(BaseModel):
     hot_notes: int = 5  # how many notes to inject at SessionStart beyond _index
     max_note_chars: int = 6000  # soft per-note size limit (consolidation pressure)
     max_injection_chars: int = 8000  # cap on the SessionStart block
+    # Claude Code fires Stop after EVERY assistant turn, not once per session —
+    # without a minimum interval the distiller (one claude -p call) would run
+    # per turn. PreCompact/SessionEnd bypass the interval (final flush).
+    distill_min_interval_s: int = 600
+    distill_prompt_budget: int = 24000  # max chars of session events per distill prompt
 
 
 def load_settings() -> Settings:

@@ -21,6 +21,7 @@ from pathlib import Path
 
 from .capture import append_event, session_file
 from .config import HOOKS_DISABLED_ENV, hooks_disabled, index_path, load_settings
+from .distiller import should_distill
 from .index import Index
 from .injection import build_injection
 from .registry import resolve_session
@@ -37,7 +38,7 @@ def _read_payload() -> dict:
         return {}
 
 
-def _spawn_distiller(session_path: Path, project: str) -> None:
+def _spawn_distiller(session_path: Path, project: str, trigger: str = "Stop") -> None:
     """Launch the distiller fully detached; ignore all failures.
 
     CRITICAL: the distiller runs ``claude -p`` inside the project, and that
@@ -53,7 +54,7 @@ def _spawn_distiller(session_path: Path, project: str) -> None:
     try:
         subprocess.Popen(
             [sys.executable, "-m", "tremula", "distill", str(session_path),
-             "--project", project],
+             "--project", project, "--trigger", trigger],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             stdin=subprocess.DEVNULL,
@@ -98,6 +99,19 @@ def run_hook(event: str, payload: dict | None = None) -> int:
         append_event(ctx.project, session_id, event, payload)
 
     if event in DISTILL_EVENTS:
-        _spawn_distiller(session_file(ctx.project, session_id), ctx.project)
+        # Stop fires on every assistant turn: only spawn a process when there
+        # are new events, no distill is in flight, and the interval has passed
+        # (PreCompact/SessionEnd flush regardless). Fail closed — a broken
+        # check must not cost a claude -p call.
+        path = session_file(ctx.project, session_id)
+        try:
+            ok, _reason = should_distill(
+                path, trigger=event,
+                min_interval=load_settings().distill_min_interval_s,
+            )
+        except Exception:
+            ok = False
+        if ok:
+            _spawn_distiller(path, ctx.project, trigger=event)
 
     return 0

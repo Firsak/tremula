@@ -1,0 +1,9 @@
+{
+  "_comment": "Template for registering Tremula's reactive loop (the 6 MCP tools) with Claude Code. Copy to the repo root as .mcp.json (or merge into an existing one) and approve the server when Claude Code asks on next session start. Requires `uv sync` to have created .venv.",
+  "mcpServers": {
+    "tremula": {
+      "command": "${CLAUDE_PROJECT_DIR:-.}/.venv/bin/tremula",
+      "args": ["serve"]
+    }
+  }
+}

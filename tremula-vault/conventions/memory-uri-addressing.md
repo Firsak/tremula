@@ -25,3 +25,9 @@ cross-vault links, so we never start with them.
 Parsing and resolution live in `src/tremula/memory_uri.py`. Resolution needs a
 `project -> vault root` mapping; Stage 2's registry supplies it, and anything
 outside the mount set is unresolvable by design.
+
+Security: path segments must start with a letter/digit/underscore — `.`,`..`
+and dotfiles are unrepresentable, so a URI can never address a file outside its
+vault. `resolve()` additionally verifies the resolved path stays inside the
+vault root. Both checks exist because the mount-set boundary is an access-control
+line, not a convention.

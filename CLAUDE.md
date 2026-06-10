@@ -32,6 +32,18 @@ Rules:
 - Add the note to `_index.md` under the right heading.
 - Do NOT record ephemera (PR numbers, SHAs, transient TODOs).
 
+## Memory system (dogfooding, automated parts)
+- Ambient hooks are wired in `.claude/settings.json`: sessions are captured to
+  NDJSON and distilled on Stop (debounced, ≥10 min apart) / PreCompact /
+  SessionEnd. Kill switch: `TREMULA_HOOKS_DISABLED=1`.
+- MCP server template: `examples/mcp.json` → copy to `.mcp.json` to get the
+  `search` / `get_context` / `read_note` / `write_note` / `link_notes` /
+  `split_note` tools. Prefer `search`/`get_context` over reading
+  `tremula-vault/` files directly once registered.
+- Distilled notes carry `source: distilled`; hand-written notes are protected
+  (judged enrichment only — see [[decisions/distiller-safety]]).
+
 ## Conventions
 - `ruff` for lint/format; tests in `tests/` run with `pytest` (or `uv run pytest`).
 - Code, comments, and docs are **English** (the source plan is Russian — reference only).
+- Live-LLM tests are opt-in: `TREMULA_LIVE_TESTS=1 uv run pytest -m live`.

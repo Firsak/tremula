@@ -20,6 +20,9 @@ SCHEME = "memory://"
 _URI_RE = re.compile(
     r"^memory://(?P<project>[A-Za-z0-9_-]+)/(?P<path>[A-Za-z0-9_./-]+?)(?:\.md)?$"
 )
+# One path segment: must not start with a dot, so ``.``, ``..`` and dotfiles are
+# unrepresentable — a memory:// URI can never escape its vault root.
+_SEGMENT_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]*$")
 
 
 class MemoryURIError(ValueError):
@@ -46,6 +49,12 @@ class MemoryURI:
         path = match["path"].strip("/")
         if not path:
             raise MemoryURIError(f"memory:// URI has empty note path: {raw!r}")
+        for segment in path.split("/"):
+            if not _SEGMENT_RE.match(segment):
+                raise MemoryURIError(
+                    f"invalid path segment {segment!r} in {raw!r} "
+                    "(segments must start with a letter/digit/underscore)"
+                )
         return cls(project=match["project"], path=path)
 
     @property
@@ -78,4 +87,10 @@ def resolve(uri: str | MemoryURI, project_roots: dict[str, Path]) -> Path:
             f"project {parsed.project!r} is not in the mount set "
             f"(known: {sorted(project_roots)})"
         )
-    return (Path(root) / parsed.relative_file()).resolve()
+    root_resolved = Path(root).resolve()
+    resolved = (root_resolved / parsed.relative_file()).resolve()
+    # Belt and suspenders on top of segment validation: a resolved note path
+    # must stay inside its vault root, or the mount-set boundary means nothing.
+    if not resolved.is_relative_to(root_resolved):
+        raise MemoryURIError(f"URI escapes its vault root: {parsed}")
+    return resolved

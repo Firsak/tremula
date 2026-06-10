@@ -20,8 +20,9 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from .config import tremula_home
+
 DEFAULT_REGISTRY_ENV = "TREMULA_REGISTRY"
-DEFAULT_REGISTRY_PATH = Path("~/.tremula/registry.yaml")
 
 
 def _expand(path: str | Path) -> Path:
@@ -117,9 +118,14 @@ class RegistryError(RuntimeError):
 
 
 def default_registry_path() -> Path:
-    """The registry path, honoring the ``TREMULA_REGISTRY`` env override."""
+    """The registry path: ``TREMULA_REGISTRY`` override, else under TREMULA_HOME.
+
+    Anchoring to ``tremula_home()`` matters for isolation: a process started
+    with ``TREMULA_HOME=/tmp/...`` (tests, sandboxes) must not silently read or
+    write the user's real registry.
+    """
     override = os.environ.get(DEFAULT_REGISTRY_ENV)
-    return _expand(override) if override else _expand(DEFAULT_REGISTRY_PATH)
+    return _expand(override) if override else tremula_home() / "registry.yaml"
 
 
 def load_registry(path: str | Path | None = None, *, missing_ok: bool = True) -> Registry:

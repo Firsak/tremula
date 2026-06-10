@@ -161,12 +161,13 @@ class VaultService:
             raise FileNotFoundError(f"note not found: {uri}")
         parent = load_note_in_vault(path, self.mounts[parent_uri.project], parent_uri.project)
 
-        sections = _split_sections(parent.body)
+        preamble, sections = _split_sections(parent.body)
         if len(sections) < 2:
             return []  # nothing to split
 
         ptype = parent.frontmatter.type.value
         pscope = parent.frontmatter.scope.value
+        psource = parent.frontmatter.source
         child_uris: list[str] = []
         toc_lines: list[str] = []
         for heading, sect_body in sections:
@@ -177,12 +178,20 @@ class VaultService:
                 scope=pscope,
                 links={"part_of": [str(parent_uri)]},
                 project=parent_uri.project,
+                source=psource,  # children inherit provenance (and protection)
             )
             child_uris.append(child_uri)
             toc_lines.append(f"- [[{MemoryURI.parse(child_uri).path}]]")
 
-        new_body = f"# {parent.title}\n\n{parent.title} index:\n\n" + "\n".join(toc_lines) + "\n"
-        post = frontmatter.Post(new_body, type=ptype, scope=pscope)
+        # The parent becomes an index but keeps its preamble (the intro text
+        # before the first ##) and ALL its frontmatter — splitting reorganizes,
+        # it must never lose content, links, or provenance.
+        intro = preamble.strip() or f"# {parent.title}"
+        new_body = f"{intro}\n\n{parent.title} index:\n\n" + "\n".join(toc_lines) + "\n"
+        post = frontmatter.Post(
+            new_body, type=ptype, scope=pscope, source=psource,
+            **parent.frontmatter.links,
+        )
         path.write_text(frontmatter.dumps(post) + "\n")
         self._reindex(path, parent_uri.project)
         return child_uris
@@ -243,7 +252,8 @@ class VaultService:
         seeds = [h.uri for h in hits]
         neighbor_uris: list[str] = []
         for seed in seeds:
-            for n in self.index.neighbors(seed, depth=depth):
+            # sorted: neighbors() returns a set; keep output deterministic.
+            for n in sorted(self.index.neighbors(seed, depth=depth)):
                 if n not in seeds and n not in neighbor_uris:
                     neighbor_uris.append(n)
 
@@ -262,13 +272,17 @@ class VaultService:
         )
 
 
-def _split_sections(body: str) -> list[tuple[str, str]]:
-    """Split a markdown body into (h2-heading, section-body) pairs."""
+def _split_sections(body: str) -> tuple[str, list[tuple[str, str]]]:
+    """Split a markdown body into (preamble, [(h2-heading, section-body), ...]).
+
+    The preamble is everything before the first ``##`` (typically the H1 title
+    plus intro text) — callers must preserve it, not drop it.
+    """
     parts = re.split(r"^##\s+(.+)$", body, flags=re.MULTILINE)
-    # parts[0] is the preamble before the first ##; then alternating heading, body
+    preamble = parts[0]
     sections: list[tuple[str, str]] = []
     it = iter(parts[1:])
     for heading in it:
         sect_body = next(it, "")
         sections.append((heading.strip(), sect_body))
-    return sections
+    return preamble, sections

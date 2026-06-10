@@ -29,6 +29,7 @@ as later stages come online, auto-updated by the hooks/distiller loop.
 - [[decisions/vault-at-repo-root]] — vault lives at repo root, not `.claude/memory/`
 - [[decisions/client-portability]] — reactive loop is client-agnostic; ambient loop is host-specific
 - [[decisions/distiller-safety]] — recursion guard, source provenance, judged enrichment
+- [[decisions/distill-cadence]] — debounce, incremental offsets, per-session lock
 
 ## Terminology
 - **ramet** — a single project's vault (one trunk)
