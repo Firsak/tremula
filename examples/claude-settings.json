@@ -1,0 +1,23 @@
+{
+  "_comment": "Example Claude Code hook wiring for Tremula's ambient layer. Merge the `hooks` block into your project's .claude/settings.json. Each hook pipes the event payload (stdin JSON) to `tremula hook <event>`, which always exits 0. Set TREMULA_HOOKS_DISABLED=1 to mute capture while debugging.",
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [{ "type": "command", "command": "tremula hook SessionStart" }] }
+    ],
+    "UserPromptSubmit": [
+      { "hooks": [{ "type": "command", "command": "tremula hook UserPromptSubmit" }] }
+    ],
+    "PostToolUse": [
+      { "matcher": "*", "hooks": [{ "type": "command", "command": "tremula hook PostToolUse" }] }
+    ],
+    "Stop": [
+      { "hooks": [{ "type": "command", "command": "tremula hook Stop" }] }
+    ],
+    "PreCompact": [
+      { "hooks": [{ "type": "command", "command": "tremula hook PreCompact" }] }
+    ],
+    "SessionEnd": [
+      { "hooks": [{ "type": "command", "command": "tremula hook SessionEnd" }] }
+    ]
+  }
+}

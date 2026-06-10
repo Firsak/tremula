@@ -16,6 +16,7 @@ as later stages come online, auto-updated by the hooks/distiller loop.
 
 ## Architecture
 - [[architecture/mount-set]] — what a session can see (ramet + member roots)
+- [[architecture/two-loops]] — reactive MCP server + ambient hooks
 
 ## Conventions
 - [[conventions/note-granularity]] — one note = one atomic fact
@@ -26,6 +27,8 @@ as later stages come online, auto-updated by the hooks/distiller loop.
 - [[decisions/name-tremula]] — why the name Tremula
 - [[decisions/stdio-transport]] — start on stdio; provider abstraction for the distiller
 - [[decisions/vault-at-repo-root]] — vault lives at repo root, not `.claude/memory/`
+- [[decisions/client-portability]] — reactive loop is client-agnostic; ambient loop is host-specific
+- [[decisions/distiller-safety]] — recursion guard, source provenance, judged enrichment
 
 ## Terminology
 - **ramet** — a single project's vault (one trunk)

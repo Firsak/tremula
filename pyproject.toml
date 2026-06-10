@@ -40,3 +40,7 @@ select = ["E", "F", "I", "UP", "B"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = [
+    "live: opt-in tests that call a real LLM (skipped unless TREMULA_LIVE_TESTS=1)",
+]
+addopts = "-m 'not live'"

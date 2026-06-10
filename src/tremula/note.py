@@ -48,6 +48,9 @@ class NoteFrontmatter(BaseModel):
 
     type: NoteType
     scope: Scope = Scope.SHARED
+    # Provenance: "manual" (human-authored, protected from the distiller) or
+    # "distilled" (written by the background distiller, safe for it to update).
+    source: str = "manual"
     links: dict[str, list[str]] = Field(default_factory=dict)
     extra: dict = Field(default_factory=dict)
 
@@ -98,7 +101,7 @@ def _split_links(meta: dict) -> tuple[dict[str, list[str]], dict]:
     for key, value in meta.items():
         if key in RELATIONS:
             links[key] = list(value) if isinstance(value, (list, tuple)) else [value]
-        elif key not in ("type", "scope"):
+        elif key not in ("type", "scope", "source"):
             extra[key] = value
     return links, extra
 
@@ -127,6 +130,7 @@ def load_note_in_vault(path: str | Path, vault_root: str | Path, project: str) -
     fm = NoteFrontmatter(
         type=post.metadata.get("type", NoteType.INDEX.value),
         scope=post.metadata.get("scope", Scope.SHARED.value),
+        source=post.metadata.get("source", "manual"),
         links=links,
         extra=extra,
     )

@@ -15,6 +15,11 @@ from pathlib import Path
 import yaml
 
 from . import __version__
+from .capture import read_session
+from .config import index_path, load_settings
+from .distiller import distill, provider_from_config
+from .hooks import run_hook
+from .index import Index
 from .note import load_note_in_vault
 from .registry import (
     Registry,
@@ -23,6 +28,8 @@ from .registry import (
     load_registry,
     resolve_session,
 )
+from .server import serve
+from .vault import VaultService
 
 
 def _find_vault_upward(start: Path) -> Path | None:
@@ -115,6 +122,48 @@ def _cmd_registry_init(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_hook(args: argparse.Namespace) -> int:
+    # Hooks must never fail a session; run_hook swallows errors and returns 0.
+    return run_hook(args.event)
+
+
+def _cmd_serve(args: argparse.Namespace) -> int:
+    return serve()
+
+
+def _cmd_index(args: argparse.Namespace) -> int:
+    ctx = resolve_session()
+    if not ctx.project:
+        print("no registered project for cwd; run `tremula registry init`", file=sys.stderr)
+        return 1
+    index = Index(index_path(ctx.project))
+    n = index.rebuild(ctx.mounts)
+    print(f"indexed {n} notes for project={ctx.project} -> {index.db_path}")
+    return 0
+
+
+def _cmd_distill(args: argparse.Namespace) -> int:
+    """Distill a captured session into notes (invoked detached by the Stop hook)."""
+    try:
+        registry = load_registry()
+        if args.project not in registry.projects:
+            print(f"unknown project {args.project!r}", file=sys.stderr)
+            return 1
+        mounts = registry.mount_set(args.project)
+        index = Index(index_path(args.project))
+        index.rebuild(mounts)
+        vault = VaultService(mounts, index, project=args.project)
+        provider = provider_from_config(load_settings().provider)
+        events = read_session(args.session_file)
+        applied = distill(events, vault, provider)
+    except Exception as exc:  # detached process: log to stderr, never crash a session
+        print(f"distill error: {exc}", file=sys.stderr)
+        return 1
+    for line in applied:
+        print(line)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="tremula", description="Tremula code-memory CLI")
     parser.add_argument("--version", action="version", version=f"tremula {__version__}")
@@ -131,6 +180,24 @@ def build_parser() -> argparse.ArgumentParser:
     reg_init.add_argument("--force", action="store_true", help="overwrite existing entry")
     reg_init.set_defaults(func=_cmd_registry_init)
     registry.set_defaults(func=_cmd_registry)
+
+    hook = sub.add_parser("hook", help="ambient hook entry (reads a payload on stdin)")
+    hook.add_argument("event", help="hook event name, e.g. SessionStart, PostToolUse, Stop")
+    hook.set_defaults(func=_cmd_hook)
+
+    serve_p = sub.add_parser("serve", help="run the MCP server over stdio")
+    serve_p.set_defaults(func=_cmd_serve)
+
+    index_p = sub.add_parser("index", help="index operations")
+    index_sub = index_p.add_subparsers(dest="index_command")
+    index_rebuild = index_sub.add_parser("rebuild", help="rebuild the index from markdown")
+    index_rebuild.set_defaults(func=_cmd_index)
+    index_p.set_defaults(func=_cmd_index)
+
+    distill_p = sub.add_parser("distill", help="distill a captured session into notes")
+    distill_p.add_argument("session_file", help="path to the session NDJSON file")
+    distill_p.add_argument("--project", required=True, help="project key to distill into")
+    distill_p.set_defaults(func=_cmd_distill)
 
     return parser
 
