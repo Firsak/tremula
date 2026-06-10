@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# Tooling
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Tremula runtime cache (rebuildable — never committed)
+*.sqlite
+*.sqlite3
+*.db
+.tremula-index/
+
+# OMC scratch
+.omc/state/
+
+# Per-stage build progress notes (local working log, not part of the repo)
+stage-progress/
