@@ -195,6 +195,53 @@ def test_roots_draft_written_only_when_root_declared(repo, tmp_path):
     assert "type: contract" in text
 
 
+def test_plan_only_focuses_on_user_targets():
+    # by file path
+    plan = plan_bootstrap(FIXTURE, only=["src/samplepkg/auth.py"])
+    assert [m.dotted for m in plan.modules] == ["samplepkg.auth"]
+    # function selection restricted to the focused module, refs counted project-wide
+    assert {name for _, name, _ in plan.functions} == {"login"}
+    # external calls only from focused modules (api_client not matched)
+    assert plan.external_calls == []
+    # by dotted name
+    plan = plan_bootstrap(FIXTURE, only=["samplepkg.store"])
+    assert [m.dotted for m in plan.modules] == ["samplepkg.store"]
+    # by directory
+    plan = plan_bootstrap(FIXTURE, only=["web"])
+    assert {m.dotted for m in plan.modules} == {"web.button", "web.client"}
+    # no match
+    assert plan_bootstrap(FIXTURE, only=["nonexistent"]).modules == []
+
+
+def test_focused_run_writes_only_targets_but_links_beyond(repo):
+    root, vault, mounts = repo
+    plan = plan_bootstrap(root, only=["src/samplepkg/auth.py"])
+    log = run_bootstrap(vault, BootstrapFake(), plan, Settings())
+    auth = vault.read_note("memory://sample/modules/samplepkg-auth")
+    # link to the UNSELECTED store module survives (dangling until enriched)
+    assert "memory://sample/modules/samplepkg-store" in auth["links"]["depends_on"]
+    assert not (mounts["sample"] / "modules" / "samplepkg-store.md").exists()
+    # focused runs skip the project-wide conventions pass (it over-generates
+    # trivia/duplicates when re-derived from a single module's perspective)
+    assert not any(line.startswith("write ") for line in log)
+    assert vault.search("ruff line length") == []
+
+
+def test_cli_bootstrap_with_target(repo, monkeypatch, capsys):
+    from tremula.cli import main
+
+    root, _, _ = repo
+    monkeypatch.delenv("TREMULA_REGISTRY", raising=False)
+    monkeypatch.chdir(root)
+    main(["registry", "init", "--name", "sample"])
+    capsys.readouterr()
+    assert main(["bootstrap", "--dry-run", "src/samplepkg/auth.py"]) == 0
+    out = capsys.readouterr().out
+    assert "modules (1)" in out and "samplepkg.auth" in out
+    assert main(["bootstrap", "--dry-run", "no/such/thing"]) == 1
+    assert "no modules match" in capsys.readouterr().err
+
+
 def test_brief_bootstrap_zero_llm_stubs_with_links(repo):
     root, vault, mounts = repo
     # provider=None: brief mode must need NO LLM at all

@@ -34,9 +34,16 @@ When invoked, follow these steps:
 Useful flags: `--max-modules N`, `--functions K`. All generated notes carry
 `source: distilled`; re-running updates them in place (idempotent).
 
-**Big repos:** full bootstrap costs one LLM call per module. Recommend
-`tremula bootstrap --brief` instead — ZERO LLM calls: module stubs built from
-docstrings + AST symbols, with the same exact dependency links. The ambient
-distiller then enriches precisely the modules the user actually works on, so
-the knowledge base grows where it matters instead of paying for everything up
-front. A later full `tremula bootstrap` upgrades remaining stubs in place.
+**Big repos:** full bootstrap costs one LLM call per module. The recommended
+flow is tiered:
+
+1. `tremula bootstrap --brief` — ZERO LLM calls: module stubs from docstrings
+   + AST symbols, with the same exact dependency links.
+2. `tremula bootstrap <target> [...]` — the user chooses where to focus: deep
+   LLM enrichment for specific files, directories, or dotted modules
+   (e.g. `tremula bootstrap src/core/billing/ pkg.auth`). Focused runs skip
+   the project-wide conventions pass and link beyond the selection (dangling
+   links resolve as the vault fills in).
+3. Everything else enriches ambiently: the distiller updates stubs in place as
+   sessions touch each module. A later full `tremula bootstrap` upgrades all
+   remaining stubs idempotently.

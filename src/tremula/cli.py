@@ -215,7 +215,11 @@ def _cmd_bootstrap(args: argparse.Namespace) -> int:
         repo_root,
         max_modules=args.max_modules or settings.bootstrap_max_modules,
         max_functions=args.functions or settings.bootstrap_functions,
+        only=args.targets or None,
     )
+    if args.targets and not plan.modules:
+        print(f"no modules match {args.targets!r}", file=sys.stderr)
+        return 1
     provider = None
     if not args.dry_run and not args.brief:
         provider = provider_from_config(settings.provider)
@@ -274,6 +278,11 @@ def build_parser() -> argparse.ArgumentParser:
     root_add.set_defaults(func=_cmd_root_add)
 
     boot = sub.add_parser("bootstrap", help="generate the initial vault from source code")
+    boot.add_argument("targets", nargs="*",
+                      help="focus on specific files/dirs/modules (e.g. src/core/ or "
+                           "pkg.module); empty = whole project. Typical big-repo flow: "
+                           "`bootstrap --brief` once, then `bootstrap <target>` to "
+                           "deep-enrich where it matters")
     boot.add_argument("--dry-run", action="store_true",
                       help="print the plan (modules, functions, call count); no LLM, no writes")
     boot.add_argument("--brief", action="store_true",

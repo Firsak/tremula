@@ -1,15 +1,9 @@
 ---
 depends_on:
-- memory://tremula/modules/tremula
-- memory://tremula/modules/tremula-config
-- memory://tremula/modules/tremula-distiller
-- memory://tremula/modules/tremula-hooks
-- memory://tremula/modules/tremula-index
-- memory://tremula/modules/tremula-note
+- memory://tremula/modules/tremula-bootstrap
 - memory://tremula/modules/tremula-registry
-- memory://tremula/modules/tremula-server
-- memory://tremula/modules/tremula-vault
-scope: shared
+- memory://tremula/modules/tremula-contracts
+scope: backend
 source: distilled
 type: module
 ---
@@ -21,3 +15,8 @@ CLI entry point for Tremula code-memory system. Provides commands to inspect vau
 ## Public API
 - `build_parser()` — Create and return the argument parser for all Tremula CLI commands
 - `main()` — Entry point for the tremula command-line application
+
+## Key commands
+
+- `tremula bootstrap [--brief]` — Generate vault from codebase. `--brief` skips LLM and creates stubs from docstrings + AST (fast for large repos).
+- `tremula root add <name> --members <project1>,<project2> [--path <path>] [--force]` — Create a bridge vault connecting specified member projects. Validates all members exist in registry, enforces >=2 members and no key collisions, creates root vault directory, makes root visible in members' mount sets immediately.

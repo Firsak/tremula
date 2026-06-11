@@ -1,7 +1,7 @@
 ---
 depends_on:
+- memory://tremula/modules/tremula-memory-uri
 - memory://tremula/modules/tremula-vault
-- memory://tremula/modules/tremula-note
 scope: shared
 source: distilled
 type: module
@@ -9,8 +9,8 @@ type: module
 
 # tremula.contracts
 
-Manages per-side contract sections in shared root vaults. Enables safe, decentralized coordination across federated projects: each project owns exactly one section per contract, preventing merge conflicts and making drift visible.
+Manages contract notes in federated root vaults shared between two projects. Ensures each project maintains its own isolated section (provider or consumer) without interfering with the other's claims.
 
 ## Public API
-
-- `upsert_contract_section(vault: VaultService, root_key: str, title: str, project: str, role: str, content: str) -> str` — Create or surgically update a contract section in a root vault. `role` is 'provider' or 'consumer'; only the caller's section is replaced, preserving all other projects' sections. Returns the memory:// URI. Raises MemoryURIError if root is not in the vault's mount set (non-member access).
+- `section_heading(role, project)` — Generate a section heading for a contract role and project name.
+- `upsert_contract_section(vault, root_key, title, project, role, content)` — Create or update this project's section of a contract note; returns the note's memory:// URI.

@@ -63,6 +63,7 @@ class BootstrapPlan:
     graph: dict[str, list[str]] = field(default_factory=dict)
     functions: list[tuple[FileMap, str, int]] = field(default_factory=list)  # (file, fn, refs)
     external_calls: list[tuple[str, str]] = field(default_factory=list)  # (dotted, url)
+    focused: bool = False  # user targeted specific modules (skip project-wide passes)
 
     def describe(self) -> list[str]:
         lines = [f"bootstrap plan for {self.repo_root}",
@@ -80,24 +81,51 @@ class BootstrapPlan:
         return lines
 
 
+def _matches_target(fmap: FileMap, target: str) -> bool:
+    """Does a module match a user focus target (path, directory, or dotted name)?"""
+    target = target.rstrip("/")
+    posix = fmap.path.as_posix()
+    return (
+        fmap.dotted == target
+        or fmap.dotted.startswith(target + ".")
+        or posix == target
+        or posix.startswith(target + "/")
+        or posix == target + fmap.path.suffix
+    )
+
+
 def plan_bootstrap(repo_root: str | Path, max_modules: int = 40,
-                   max_functions: int = 10) -> BootstrapPlan:
-    """Deterministic planning pass — no LLM, no writes."""
+                   max_functions: int = 10,
+                   only: list[str] | None = None) -> BootstrapPlan:
+    """Deterministic planning pass — no LLM, no writes.
+
+    ``only`` focuses the plan on user-chosen targets (file paths, directories,
+    or dotted module names): only matching modules are summarized/stubbed,
+    while reference counting still sees the whole project.
+    """
     repo_root = Path(repo_root)
     files = [map_file(repo_root, rel) for rel in scan(repo_root)]
     files = [f for f in files if f.loc > 2]  # skip empty stubs
     files.sort(key=lambda f: -f.loc)
-    modules = files[:max_modules]
-    graph = import_graph(modules)
+    # The graph spans the whole project: a focused run still links its notes to
+    # unselected modules (their notes may exist as stubs, or arrive later —
+    # links-before-targets is allowed by design).
+    graph = import_graph(files)
 
-    # Key functions: exported AND referenced from other project files (by name).
+    modules = files
+    if only:
+        modules = [f for f in files if any(_matches_target(f, t) for t in only)]
+    modules = modules[:max_modules]
+
+    # Key functions: exported, defined in a SELECTED module, and referenced
+    # from other project files (counted across the whole project).
     candidates: list[tuple[FileMap, str, int]] = []
     for fmap in modules:
         for sym in fmap.symbols:
             if sym.kind != "function" or not sym.exported:
                 continue
             pattern = re.compile(rf"\b{re.escape(sym.name)}\b")
-            refs = sum(1 for other in modules
+            refs = sum(1 for other in files
                        if other is not fmap and pattern.search(other.source))
             if refs:
                 candidates.append((fmap, sym.name, refs))
@@ -111,7 +139,8 @@ def plan_bootstrap(repo_root: str | Path, max_modules: int = 40,
                     external.append((fmap.dotted, url))
 
     return BootstrapPlan(repo_root=repo_root, modules=modules, graph=graph,
-                         functions=candidates[:max_functions], external_calls=external)
+                         functions=candidates[:max_functions], external_calls=external,
+                         focused=bool(only))
 
 
 def _module_uri(vault: VaultService, dotted: str) -> str:
@@ -178,8 +207,6 @@ def run_bootstrap(
     if project is None:
         raise ValueError("bootstrap needs a current project")
 
-    selected = {m.dotted for m in plan.modules}
-
     # 1) module notes — links always from the import graph; prose from the LLM
     #    (full mode) or from docstrings/AST (brief mode, free)
     for fmap in plan.modules:
@@ -198,8 +225,10 @@ def run_bootstrap(
                 log.append(f"skip module {fmap.dotted}: unusable summary")
                 continue
             body = _render_module_body(fmap.dotted, data)
-        deps = [_module_uri(vault, dep) for dep in plan.graph.get(fmap.dotted, [])
-                if dep in selected]
+        # Link to every project-internal dependency, selected or not: the
+        # target note may exist already (stub) or arrive later — dangling
+        # links are allowed by design and resolve as the vault fills in.
+        deps = [_module_uri(vault, dep) for dep in plan.graph.get(fmap.dotted, [])]
         try:
             uri = vault.write_note(
                 title=fmap.dotted, content=body,
@@ -242,8 +271,10 @@ def run_bootstrap(
                 log.append(f"skip function {fmap.dotted}.{name}: manual note exists")
 
     # 3) conventions/decisions — through the distiller ops pipeline (judged);
-    #    skipped in brief mode (zero-LLM guarantee)
-    configs = "" if brief else _collect_configs(plan.repo_root)
+    #    skipped in brief mode (zero-LLM guarantee) AND in focused runs:
+    #    conventions are project-wide, re-deriving them from one module's
+    #    perspective over-generates trivia and duplicates.
+    configs = "" if (brief or plan.focused) else _collect_configs(plan.repo_root)
     if configs:
         tree = "\n".join(str(m.path) for m in plan.modules)
         prompt = f"{CONVENTIONS_PROMPT}\nPROJECT FILES:\n{tree}\n\nCONFIGS:\n{configs}\n"
