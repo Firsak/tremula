@@ -33,3 +33,10 @@ When invoked, follow these steps:
 
 Useful flags: `--max-modules N`, `--functions K`. All generated notes carry
 `source: distilled`; re-running updates them in place (idempotent).
+
+**Big repos:** full bootstrap costs one LLM call per module. Recommend
+`tremula bootstrap --brief` instead — ZERO LLM calls: module stubs built from
+docstrings + AST symbols, with the same exact dependency links. The ambient
+distiller then enriches precisely the modules the user actually works on, so
+the knowledge base grows where it matters instead of paying for everything up
+front. A later full `tremula bootstrap` upgrades remaining stubs in place.

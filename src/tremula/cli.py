@@ -15,7 +15,7 @@ from pathlib import Path
 import yaml
 
 from . import __version__
-from .config import index_path, load_settings
+from .config import index_path, load_settings, tremula_home
 from .distiller import provider_from_config, run_distill
 from .hooks import run_hook
 from .index import Index
@@ -171,6 +171,36 @@ def _cmd_distill(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_root_add(args: argparse.Namespace) -> int:
+    """Declare a bridge vault (root) connecting member projects."""
+    reg_path = default_registry_path()
+    data = {}
+    if reg_path.exists():
+        data = yaml.safe_load(reg_path.read_text()) or {}
+    members = [m.strip() for m in args.members.split(",") if m.strip()]
+    if len(members) < 2:
+        print("a root needs at least two members (--members a,b)", file=sys.stderr)
+        return 1
+    roots = data.setdefault("roots", {})
+    if args.name in roots and not args.force:
+        print(f"root {args.name!r} already declared (use --force to overwrite)",
+              file=sys.stderr)
+        return 1
+    path = Path(args.path).expanduser().resolve() if args.path \
+        else tremula_home() / "roots" / args.name
+    roots[args.name] = {"members": members, "path": str(path)}
+    try:
+        Registry.model_validate(data)  # rejects unknown members / key collisions
+    except ValueError as exc:
+        print(f"refusing to write invalid registry: {exc}", file=sys.stderr)
+        return 1
+    path.mkdir(parents=True, exist_ok=True)
+    reg_path.parent.mkdir(parents=True, exist_ok=True)
+    reg_path.write_text(yaml.safe_dump(data, sort_keys=True))
+    print(f"declared root {args.name!r} [{', '.join(members)}] -> {path}")
+    return 0
+
+
 def _cmd_bootstrap(args: argparse.Namespace) -> int:
     """Generate the initial vault from the current project's source code."""
     from .bootstrap import plan_bootstrap, run_bootstrap
@@ -187,7 +217,7 @@ def _cmd_bootstrap(args: argparse.Namespace) -> int:
         max_functions=args.functions or settings.bootstrap_functions,
     )
     provider = None
-    if not args.dry_run:
+    if not args.dry_run and not args.brief:
         provider = provider_from_config(settings.provider)
     index = Index(index_path(ctx.project))
     index.rebuild(ctx.mounts)
@@ -196,6 +226,7 @@ def _cmd_bootstrap(args: argparse.Namespace) -> int:
     log = run_bootstrap(
         vault, provider, plan, settings, registry=registry,
         dry_run=args.dry_run, judge_distilled=settings.judge_distilled_updates,
+        brief=args.brief,
     )
     for line in log:
         print(line)
@@ -232,9 +263,22 @@ def build_parser() -> argparse.ArgumentParser:
     index_rebuild.set_defaults(func=_cmd_index)
     index_p.set_defaults(func=_cmd_index)
 
+    root_p = sub.add_parser("root", help="bridge-vault (root) operations")
+    root_sub = root_p.add_subparsers(dest="root_command", required=True)
+    root_add = root_sub.add_parser("add", help="declare a root connecting member projects")
+    root_add.add_argument("name", help="root key, e.g. webapp-api")
+    root_add.add_argument("--members", required=True,
+                          help="comma-separated registered project keys")
+    root_add.add_argument("--path", help="root vault dir (default: ~/.tremula/roots/<name>)")
+    root_add.add_argument("--force", action="store_true", help="overwrite existing root")
+    root_add.set_defaults(func=_cmd_root_add)
+
     boot = sub.add_parser("bootstrap", help="generate the initial vault from source code")
     boot.add_argument("--dry-run", action="store_true",
                       help="print the plan (modules, functions, call count); no LLM, no writes")
+    boot.add_argument("--brief", action="store_true",
+                      help="zero-LLM stub bootstrap (docstrings + AST symbols); the ambient "
+                           "distiller enriches notes as you work — recommended for big repos")
     boot.add_argument("--max-modules", type=int, default=None,
                       help="cap on module notes (default from settings: 40)")
     boot.add_argument("--functions", type=int, default=None,

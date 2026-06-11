@@ -195,6 +195,59 @@ def test_roots_draft_written_only_when_root_declared(repo, tmp_path):
     assert "type: contract" in text
 
 
+def test_brief_bootstrap_zero_llm_stubs_with_links(repo):
+    root, vault, mounts = repo
+    # provider=None: brief mode must need NO LLM at all
+    log = run_bootstrap(vault, None, plan_bootstrap(root), Settings(), brief=True)
+    auth = vault.read_note("memory://sample/modules/samplepkg-auth")
+    assert auth["source"] == "distilled"
+    assert "Authentication for the sample app." in auth["body"]  # docstring, free
+    assert "`login` (function)" in auth["body"]                   # AST symbols
+    # links still graph-derived even in brief mode
+    assert "memory://sample/modules/samplepkg-store" in auth["links"]["depends_on"]
+    # no LLM passes ran
+    assert not list(mounts["sample"].glob("functions/*"))
+    assert not any(line.startswith("write ") for line in log)  # no conventions ops
+    # ts file without docstring gets the stub marker
+    client = vault.read_note("memory://sample/modules/web-client")
+    assert "brief bootstrap stub" in client["body"]
+
+
+def test_brief_stub_is_enriched_by_distiller_later(repo):
+    from tremula.distiller import distill
+
+    root, vault, _ = repo
+    run_bootstrap(vault, None, plan_bootstrap(root), Settings(), brief=True)
+
+    class EnrichingProvider:
+        def complete(self, prompt: str) -> str:
+            # the ambient distiller reuses the exact existing title -> in-place update
+            return json.dumps({"ops": [{"action": "write", "title": "samplepkg.auth",
+                                        "type": "module", "scope": "shared",
+                                        "content": "# samplepkg.auth\n\nNow richly "
+                                                   "documented after a work session.\n"}]})
+
+    applied = distill([{"event": "Stop", "payload": {"text": "worked on auth"}}],
+                      vault, EnrichingProvider())
+    assert applied == ["write memory://sample/modules/samplepkg-auth"]
+    note = vault.read_note("memory://sample/modules/samplepkg-auth")
+    assert "richly documented" in note["body"]      # stub grew into knowledge
+    assert "brief bootstrap stub" not in note["body"]
+
+
+def test_cli_bootstrap_brief(repo, monkeypatch, capsys):
+    from tremula.cli import main
+
+    root, _, _ = repo
+    monkeypatch.delenv("TREMULA_REGISTRY", raising=False)
+    monkeypatch.chdir(root)
+    main(["registry", "init", "--name", "sample"])
+    capsys.readouterr()
+    assert main(["bootstrap", "--brief"]) == 0
+    out = capsys.readouterr().out
+    assert "[brief]" in out
+
+
 def test_cli_bootstrap_dry_run(repo, monkeypatch, capsys):
     from tremula.cli import main
 

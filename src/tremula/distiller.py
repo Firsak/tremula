@@ -108,10 +108,25 @@ def provider_from_config(cfg: ProviderConfig) -> Provider:
     raise ValueError(f"unknown provider kind: {cfg.kind!r}")
 
 
+FEDERATION_RULE = """\
+FEDERATION: this project shares contract vaults (roots) with other projects.
+Available roots: {roots}.
+If the session shows a cross-service call, or a change to an endpoint / shared
+type / event schema that another project depends on, ALSO emit a contract op:
+{{"action": "contract", "root": "<one of the roots above>",
+  "title": "<endpoint or resource, e.g. POST /items>",
+  "role": "provider" | "consumer",
+  "content": "markdown describing YOUR side: schema, expectations, behavior"}}
+provider = this project implements/serves it; consumer = this project calls it.
+You write only your own side's section; the other project maintains theirs.
+"""
+
+
 def build_prompt(
     events: list[dict],
     existing_notes: list[dict] | None = None,
     budget: int = 24000,
+    roots: list[str] | None = None,
 ) -> str:
     # Keep the most recent events within the char budget; old ones age out.
     kept: list[str] = []
@@ -131,7 +146,10 @@ def build_prompt(
     if existing_notes:
         existing_block = "EXISTING NOTES (revise by reusing the exact title):\n" + \
             json.dumps(existing_notes, ensure_ascii=False, indent=0) + "\n\n"
-    return f"{HYGIENE}\n\n{existing_block}SESSION EVENTS:\n{transcript}\n"
+    federation_block = ""
+    if roots:
+        federation_block = FEDERATION_RULE.format(roots=", ".join(sorted(roots))) + "\n"
+    return f"{HYGIENE}\n{federation_block}\n{existing_block}SESSION EVENTS:\n{transcript}\n"
 
 
 JUDGE_PROMPT = """\
@@ -270,6 +288,15 @@ def apply_ops(vault: VaultService, ops: list[dict], provider: Provider | None = 
             elif action == "link":
                 vault.link_notes(op["src"], op["dst"], op["relation"])
                 applied.append(f"link {op['src']} -{op['relation']}-> {op['dst']}")
+            elif action == "contract":
+                from .contracts import upsert_contract_section  # avoid module cycle
+
+                uri = upsert_contract_section(
+                    vault, root_key=op["root"], title=op["title"],
+                    project=vault.project or "unknown", role=op["role"],
+                    content=op.get("content", ""),
+                )
+                applied.append(f"contract {uri} [{op['role']}]")
             else:
                 applied.append(f"skip unknown action: {action!r}")
         except (KeyError, ValueError, FileNotFoundError) as exc:
@@ -283,7 +310,11 @@ def distill(events: list[dict], vault: VaultService, provider: Provider,
     if not events:
         return []
     existing = vault.existing_notes()
-    response = provider.complete(build_prompt(events, existing, budget=prompt_budget))
+    # Member roots = everything mounted besides the project's own ramet.
+    roots = sorted(k for k in vault.mounts if k != vault.project)
+    response = provider.complete(
+        build_prompt(events, existing, budget=prompt_budget, roots=roots)
+    )
     ops = parse_ops(response)
     return apply_ops(vault, ops, provider=provider, judge_distilled=judge_distilled)
 

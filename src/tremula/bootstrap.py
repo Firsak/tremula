@@ -118,6 +118,27 @@ def _module_uri(vault: VaultService, dotted: str) -> str:
     return vault.target_uri(dotted, "module")
 
 
+BRIEF_STUB_MARKER = "(brief bootstrap stub — enriched ambiently as the project is worked on)"
+
+
+def _render_brief_body(fmap) -> str:
+    """Zero-LLM module stub: docstring (if any) + AST symbol listing.
+
+    Big repos can't afford one LLM call per module up front; a stub gives the
+    retrieval funnel something to attach immediately, and the ambient distiller
+    enriches exactly the modules the user actually works on (it sees existing
+    notes and updates its own in place).
+    """
+    summary = fmap.docstring.split("\n\n")[0].strip() if fmap.docstring \
+        else BRIEF_STUB_MARKER
+    lines = [f"# {fmap.dotted}", "", summary]
+    exported = [s for s in fmap.symbols if s.exported]
+    if exported:
+        lines += ["", "## Public symbols"]
+        lines += [f"- `{s.name}` ({s.kind})" for s in exported[:15]]
+    return "\n".join(lines) + "\n"
+
+
 def _render_module_body(dotted: str, data: dict) -> str:
     lines = [f"# {dotted}", "", str(data.get("purpose", "")).strip()]
     api = data.get("public_api") or []
@@ -138,48 +159,60 @@ def run_bootstrap(
     registry: Registry | None = None,
     dry_run: bool = False,
     judge_distilled: bool = False,
+    brief: bool = False,
 ) -> list[str]:
-    """Execute the plan; returns a human-readable log. ``dry_run`` -> plan only."""
+    """Execute the plan; returns a human-readable log.
+
+    ``dry_run`` -> plan only. ``brief`` -> ZERO LLM calls: module stubs from
+    docstrings + AST symbols (links still graph-derived); function and
+    conventions passes are skipped — the ambient distiller enriches the stubs
+    progressively as the user works on each module.
+    """
     log: list[str] = list(plan.describe())
     if dry_run:
         log.append("dry-run: no LLM calls, nothing written")
         return log
-    if provider is None:
-        raise ValueError("a provider is required unless dry_run")
+    if provider is None and not brief:
+        raise ValueError("a provider is required unless dry_run or brief")
     project = vault.project
     if project is None:
         raise ValueError("bootstrap needs a current project")
 
     selected = {m.dotted for m in plan.modules}
 
-    # 1) module notes — prose from the LLM, links from the import graph
+    # 1) module notes — links always from the import graph; prose from the LLM
+    #    (full mode) or from docstrings/AST (brief mode, free)
     for fmap in plan.modules:
-        prompt = (f"{MODULE_PROMPT}\nMODULE: {fmap.dotted} ({fmap.language})\n"
-                  f"SYMBOLS: {[s.name for s in fmap.symbols if s.exported]}\n"
-                  f"SOURCE:\n{fmap.source[:settings.bootstrap_module_src_chars]}\n")
-        try:
-            data = _extract_json(provider.complete(prompt))
-        except Exception as exc:
-            log.append(f"skip module {fmap.dotted}: provider error: {exc}")
-            continue
-        if not data or "purpose" not in data:
-            log.append(f"skip module {fmap.dotted}: unusable summary")
-            continue
+        if brief:
+            body = _render_brief_body(fmap)
+        else:
+            prompt = (f"{MODULE_PROMPT}\nMODULE: {fmap.dotted} ({fmap.language})\n"
+                      f"SYMBOLS: {[s.name for s in fmap.symbols if s.exported]}\n"
+                      f"SOURCE:\n{fmap.source[:settings.bootstrap_module_src_chars]}\n")
+            try:
+                data = _extract_json(provider.complete(prompt))
+            except Exception as exc:
+                log.append(f"skip module {fmap.dotted}: provider error: {exc}")
+                continue
+            if not data or "purpose" not in data:
+                log.append(f"skip module {fmap.dotted}: unusable summary")
+                continue
+            body = _render_module_body(fmap.dotted, data)
         deps = [_module_uri(vault, dep) for dep in plan.graph.get(fmap.dotted, [])
                 if dep in selected]
         try:
             uri = vault.write_note(
-                title=fmap.dotted, content=_render_module_body(fmap.dotted, data),
+                title=fmap.dotted, content=body,
                 type="module", scope="shared",
                 links={"depends_on": deps} if deps else None,
                 source="distilled", protect=True,
             )
-            log.append(f"module {uri}")
+            log.append(f"module {uri}" + (" [brief]" if brief else ""))
         except PermissionError:
             log.append(f"skip module {fmap.dotted}: manual note exists")
 
-    # 2) key function notes — one batched call
-    if plan.functions:
+    # 2) key function notes — one batched call (full mode only)
+    if plan.functions and not brief:
         listing = "\n".join(
             f"- {f.dotted}.{name} (referenced in {refs} files):\n"
             f"{_function_snippet(f, name)}"
@@ -208,8 +241,9 @@ def run_bootstrap(
             except PermissionError:
                 log.append(f"skip function {fmap.dotted}.{name}: manual note exists")
 
-    # 3) conventions/decisions — through the distiller ops pipeline (judged)
-    configs = _collect_configs(plan.repo_root)
+    # 3) conventions/decisions — through the distiller ops pipeline (judged);
+    #    skipped in brief mode (zero-LLM guarantee)
+    configs = "" if brief else _collect_configs(plan.repo_root)
     if configs:
         tree = "\n".join(str(m.path) for m in plan.modules)
         prompt = f"{CONVENTIONS_PROMPT}\nPROJECT FILES:\n{tree}\n\nCONFIGS:\n{configs}\n"
@@ -222,25 +256,27 @@ def run_bootstrap(
         except Exception as exc:
             log.append(f"skip conventions: provider error: {exc}")
 
-    # 4) draft root contracts for detected external calls (no LLM needed)
+    # 4) draft root contracts for detected external calls (no LLM needed) —
+    #    written as this project's CONSUMER section, so the provider project's
+    #    section (and any hand-written content) is never touched.
     if registry is not None and plan.external_calls:
+        from .contracts import upsert_contract_section
+
         member_roots = [name for name, root in registry.roots.items()
                         if project in root.members and name in vault.mounts]
         for root_name in member_roots:
             for dotted, url in plan.external_calls:
                 title = re.sub(r"^https?://", "", url)
                 try:
-                    uri = vault.write_note(
-                        title=title,
-                        content=(f"# {title}\n\nDraft contract (bootstrap): "
-                                 f"`{project}` calls `{url}` from `{dotted}`. "
-                                 f"Consumer side — fill in schema/expectations.\n"),
-                        type="contract", scope="shared",
-                        project=root_name, source="distilled", protect=True,
+                    uri = upsert_contract_section(
+                        vault, root_key=root_name, title=title,
+                        project=project, role="consumer",
+                        content=(f"Draft (bootstrap): `{project}` calls `{url}` "
+                                 f"from `{dotted}`. Fill in schema/expectations."),
                     )
-                    log.append(f"contract {uri}")
-                except PermissionError:
-                    log.append(f"skip contract {title}: manual note exists")
+                    log.append(f"contract {uri} [consumer]")
+                except Exception as exc:
+                    log.append(f"skip contract {title}: {exc}")
 
     # 5) surface everything in _index.md and refresh the cache
     if project in vault.mounts:

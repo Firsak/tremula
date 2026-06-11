@@ -38,6 +38,7 @@ class FileMap:
     imports: list[str] = field(default_factory=list)  # raw import targets
     source: str = ""
     loc: int = 0
+    docstring: str = ""  # module docstring (python), free zero-LLM summary
 
 
 @cache
@@ -101,6 +102,13 @@ def map_file(repo_root: str | Path, rel_path: Path) -> FileMap:
 
 
 def _walk_python(root, fmap: FileMap) -> None:
+    # Module docstring: a leading expression-statement string.
+    if not fmap.docstring and root.children:
+        first = root.children[0]
+        if first.type == "expression_statement" and first.children \
+                and first.children[0].type == "string":
+            raw = first.children[0].text.decode()
+            fmap.docstring = raw.strip("\"' \n")
     for node in root.children:
         if node.type in ("function_definition", "class_definition"):
             name_node = node.child_by_field_name("name")
