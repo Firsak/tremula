@@ -46,15 +46,17 @@ Artifacts: PyPI package `tremula-mcp` · CLI `tremula` · `tremula-vault/` folde
 - Saving ephemera in notes (PR numbers, SHAs, transient TODOs) — distiller hygiene rules forbid it.
 - Russian-language code/docs in the repo (the source plan stays as an external reference only).
 
-## Status (updated 2026-06-11)
-Stages 1–3 complete and committed (`b82ba95` → `0ae655c`), 104 tests + 3 live
-opt-in, all green. **Beyond-spec work the live run forced:** distiller safety
-(source provenance, judged enrichment + no-loss backstop, optional
-`judge_distilled_updates`), distill cadence (Stop fires per turn → debounce +
-incremental offsets + per-session lock), fork-bomb recursion guards, memory://
-path-traversal hardening, FTS5 crash-proofing, `.mcp.json` + hooks registration
-(both live — dogfooding active), public-ready Firsak history. Stages 4–7
-remain; refined plans live in the task list and `stage-progress/review-1.md`.
+## Status (updated 2026-06-11 — BUILD COMPLETE)
+**All Stages 1–7 built, tested, and dogfooded.** 221 tests + 3 live opt-in,
+all green. Beyond-spec work added along the way: distiller safety (provenance,
+judged enrichment + no-loss backstop, `judge_distilled_updates`), distill
+cadence (debounce + incremental offsets + per-session lock), fork-bomb guards,
+memory:// path-traversal hardening, FTS5 crash-proofing, `_index.md`
+auto-section, `bootstrap --brief` (zero-LLM) + focused targets, heat telemetry
+with attic archiving, `.mcp.json` + hooks live (the vault wrote ~75% of its own
+notes), public-ready Firsak history. Remaining: PyPI publish (deferred with
+Stage 8: HTTP daemon, sqlite-vec, Rust watcher). Per-stage logs in
+`stage-progress/` (untracked).
 
 ## Acceptance Criteria
 Per-stage tests **and** dogfooding (Tremula self-hosts as its own first registry entry). "Done" = both gates pass.
@@ -63,11 +65,11 @@ Per-stage tests **and** dogfooding (Tremula self-hosts as its own first registry
 - [x] **Stage 2 — Registry + mount set:** `~/.tremula/registry.yaml` (PyYAML + pydantic models for `projects` + `roots`); mount-set resolution by cwd. Test: pydantic validates registry; given a cwd, resolver returns own ramet + member roots only; out-of-set notes are excluded.
 - [x] **Stage 3 — Reactive MCP server (FastMCP, stdio):** tools `write_note(title, content, links, type, scope)`, `read_note(uri)`, `get_context(topic, depth)`, `search(query, scope?)`, `link_notes(a, b, relation)`, `split_note(uri)`. SQLite FTS5 index over markdown (rebuildable). Test: pytest per tool; FTS returns ranked hits within mount set; index rebuilds from markdown.
 - [x] **Stage 3 — Ambient hooks:** CLI `tremula hook <event>` for `PostToolUse`/`UserPromptSubmit`/`Stop` → append line to per-session NDJSON, always exit 0; hook-disable flag. SessionStart injection reads `_index.md` + N hot notes into context. Distiller: on `Stop`/`PreCompact`/`SessionEnd` a detached process runs `claude -p` over the session NDJSON and writes note updates to the ramet (+ root nodes), with hygiene rules in the prompt and a config-abstracted provider. Test: hook appends valid NDJSON & exits 0; injection emits `_index.md` + hot notes; distiller produces note diffs on a fixture NDJSON session.
-- [ ] **Stage 4 — Retrieval funnel:** `get_context(topic, depth)` does FTS seed + graph neighbors at depth 1–2, crossing vault boundaries via `memory://` within the mount set; `UserPromptSubmit` silently attaches 2–3 notes scoped by working context (recent file paths, git status, cwd) — not prompt words. Test: depth-bounded traversal returns expected neighbor set incl. cross-root contract consumers.
-- [ ] **Stage 5 — Bootstrap `/tremula-init`:** walk project (tree, configs, deps) → tree-sitter AST map (python/ts/tsx) → per-module subagent summaries into `modules/`+`functions/` → conventions/decisions pass → draft root nodes for external calls (if root declared) → generate `_index.md` + link the graph. Test: run on a sample repo produces a populated, internally-linked vault.
-- [ ] **Stage 6 — Roots/federation:** bridge vaults holding contracts (endpoints, shared types, event schemas); a root node referenced by both sides (implements / calls); distiller rule: external call or contract change → update the root node from this repo's side; contract drift visible in the note. Test: cross-repo contract node created and linked from both ramets; drift surfaces.
-- [ ] **Stage 7 — Consolidation/splitting:** turn counter triggers background revision every N turns (merge dupes, drop stale, split large notes); per-note + per-injection size limits force consolidation; `split_note` turns an oversized note's parent into an index. Test: oversized note splits with parent-as-index; dedupe merges; stale eviction runs.
-- [ ] **Cross-cutting — Dogfooding:** Tremula is the first `registry.yaml` entry; its own `tremula-vault/` exists from the first commit and is auto-maintained by the hooks/distiller as later stages come online; graph opens in Obsidian.
+- [x] **Stage 4 — Retrieval funnel:** `get_context(topic, depth)` does FTS seed + graph neighbors at depth 1–2, crossing vault boundaries via `memory://` within the mount set; `UserPromptSubmit` silently attaches 2–3 notes scoped by working context (recent file paths, git status, cwd) — not prompt words. Test: depth-bounded traversal returns expected neighbor set incl. cross-root contract consumers.
+- [x] **Stage 5 — Bootstrap `/tremula-init`:** walk project (tree, configs, deps) → tree-sitter AST map (python/ts/tsx) → per-module subagent summaries into `modules/`+`functions/` → conventions/decisions pass → draft root nodes for external calls (if root declared) → generate `_index.md` + link the graph. Test: run on a sample repo produces a populated, internally-linked vault.
+- [x] **Stage 6 — Roots/federation:** bridge vaults holding contracts (endpoints, shared types, event schemas); a root node referenced by both sides (implements / calls); distiller rule: external call or contract change → update the root node from this repo's side; contract drift visible in the note. Test: cross-repo contract node created and linked from both ramets; drift surfaces.
+- [x] **Stage 7 — Consolidation/splitting:** turn counter triggers background revision every N turns (merge dupes, drop stale, split large notes); per-note + per-injection size limits force consolidation; `split_note` turns an oversized note's parent into an index. Test: oversized note splits with parent-as-index; dedupe merges; stale eviction runs.
+- [x] **Cross-cutting — Dogfooding:** Tremula is the first `registry.yaml` entry; its own `tremula-vault/` exists from the first commit and is auto-maintained by the hooks/distiller as later stages come online; graph opens in Obsidian.
 - [ ] **Packaging:** `uvx tremula-mcp` boots a working stdio server; `tremula` CLI runs. (Final PyPI/GitHub publish check is a Stage-8/open-question item — deferred.)
 
 ## Assumptions Exposed & Resolved

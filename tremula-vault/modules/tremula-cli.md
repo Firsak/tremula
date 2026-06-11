@@ -1,8 +1,6 @@
 ---
 depends_on:
 - memory://tremula/modules/tremula-bootstrap
-- memory://tremula/modules/tremula-registry
-- memory://tremula/modules/tremula-contracts
 scope: backend
 source: distilled
 type: module
@@ -18,5 +16,5 @@ CLI entry point for Tremula code-memory system. Provides commands to inspect vau
 
 ## Key commands
 
-- `tremula bootstrap [--brief]` — Generate vault from codebase. `--brief` skips LLM and creates stubs from docstrings + AST (fast for large repos).
+- `tremula bootstrap [--brief] [targets...]` — Generate vault from codebase. `--brief` skips LLM and creates stubs from docstrings + AST (fast for large repos). Optional positional `targets...` (file paths, directories, or dotted module names) trigger focused mode: matched modules get full LLM treatment, rest stay stubs/ambient. Errors if no modules match targets.
 - `tremula root add <name> --members <project1>,<project2> [--path <path>] [--force]` — Create a bridge vault connecting specified member projects. Validates all members exist in registry, enforces >=2 members and no key collisions, creates root vault directory, makes root visible in members' mount sets immediately.

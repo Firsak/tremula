@@ -30,13 +30,15 @@ def _fts_query(text: str) -> str:
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS notes (
-    uri     TEXT PRIMARY KEY,
-    project TEXT NOT NULL,
-    type    TEXT NOT NULL,
-    scope   TEXT NOT NULL,
-    title   TEXT NOT NULL,
-    mtime   REAL NOT NULL,
-    size    INTEGER NOT NULL DEFAULT 0
+    uri       TEXT PRIMARY KEY,
+    project   TEXT NOT NULL,
+    type      TEXT NOT NULL,
+    scope     TEXT NOT NULL,
+    title     TEXT NOT NULL,
+    mtime     REAL NOT NULL,
+    size      INTEGER NOT NULL DEFAULT 0,
+    reads     INTEGER NOT NULL DEFAULT 0,
+    last_read REAL NOT NULL DEFAULT 0
 );
 CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
     uri UNINDEXED, title, body, tokenize = 'porter unicode61'
@@ -83,9 +85,33 @@ class Index:
         """Light in-place migration — the index is a rebuildable cache, so a
         missing column is just added (existing rows refresh on next access)."""
         columns = {r["name"] for r in self.conn.execute("PRAGMA table_info(notes)")}
-        if "size" not in columns:
-            self.conn.execute("ALTER TABLE notes ADD COLUMN size INTEGER NOT NULL DEFAULT 0")
+        additions = {
+            "size": "INTEGER NOT NULL DEFAULT 0",
+            "reads": "INTEGER NOT NULL DEFAULT 0",
+            "last_read": "REAL NOT NULL DEFAULT 0",
+        }
+        changed = False
+        for column, decl in additions.items():
+            if column not in columns:
+                self.conn.execute(f"ALTER TABLE notes ADD COLUMN {column} {decl}")
+                changed = True
+        if changed:
             self.conn.commit()
+
+    def touch(self, uri: str) -> None:
+        """Record one read of a note (heat telemetry for the revision pass).
+
+        Heat is usage data, NOT rebuildable from markdown — it survives note
+        rewrites and index rebuilds, but deleting the cache DB resets it (the
+        stale-detector then simply stays quiet until counts re-accumulate).
+        """
+        import time
+
+        self.conn.execute(
+            "UPDATE notes SET reads = reads + 1, last_read = ? WHERE uri = ?",
+            (time.time(), uri),
+        )
+        self.conn.commit()
 
     def close(self) -> None:
         self.conn.close()
@@ -101,12 +127,18 @@ class Index:
     def upsert_note(self, note: Note, body: str, mtime: float, *,
                     size: int = 0, commit: bool = True) -> None:
         uri = str(note.uri)
+        # Heat survives rewrites: usage telemetry is not derivable from markdown.
+        old = self.conn.execute(
+            "SELECT reads, last_read FROM notes WHERE uri = ?", (uri,)
+        ).fetchone()
+        reads, last_read = (old["reads"], old["last_read"]) if old else (0, 0.0)
         self.delete_note(uri, commit=False)  # idempotent replace
         self.conn.execute(
-            "INSERT INTO notes(uri, project, type, scope, title, mtime, size) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO notes(uri, project, type, scope, title, mtime, size, "
+            "reads, last_read) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (uri, note.uri.project, note.frontmatter.type.value,
-             note.frontmatter.scope.value, note.title, mtime, size),
+             note.frontmatter.scope.value, note.title, mtime, size,
+             reads, last_read),
         )
         self.conn.execute(
             "INSERT INTO notes_fts(uri, title, body) VALUES (?, ?, ?)",
@@ -134,6 +166,10 @@ class Index:
         Runs as one transaction: concurrent readers never observe a half-built
         index, and N notes don't cost N commits.
         """
+        heat = {
+            r["uri"]: (r["reads"], r["last_read"])
+            for r in self.conn.execute("SELECT uri, reads, last_read FROM notes")
+        }
         self.conn.executescript(
             "DELETE FROM notes; DELETE FROM notes_fts; DELETE FROM links;"
         )
@@ -143,12 +179,21 @@ class Index:
             if not vault_root.is_dir():
                 continue
             for path in sorted(vault_root.rglob("*.md")):
+                rel_parts = path.relative_to(vault_root).parts
+                if "attic" in rel_parts:
+                    continue  # archived notes are out of the active graph
                 note = load_note_in_vault(path, vault_root, project=key)
                 stat = path.stat()
                 self.upsert_note(
                     note, body=note.body, mtime=stat.st_mtime,
                     size=stat.st_size, commit=False,
                 )
+                uri = str(note.uri)
+                if uri in heat:  # restore telemetry wiped by the table reset
+                    self.conn.execute(
+                        "UPDATE notes SET reads = ?, last_read = ? WHERE uri = ?",
+                        (*heat[uri], uri),
+                    )
                 count += 1
         self.conn.commit()
         return count
@@ -174,6 +219,8 @@ class Index:
                 continue
             for path in vault_root.rglob("*.md"):
                 rel = path.relative_to(vault_root).with_suffix("")
+                if "attic" in rel.parts:
+                    continue  # archived notes are out of the active graph
                 uri = f"memory://{key}/" + "/".join(rel.parts)
                 seen.add(uri)
                 try:

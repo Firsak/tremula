@@ -65,8 +65,9 @@ def sync_index_auto_section(vault_root: str | Path, project: str) -> bool:
 
     entries: list[str] = []
     for path in sorted(vault_root.rglob("*.md")):
-        rel = "/".join(path.relative_to(vault_root).with_suffix("").parts)
-        if rel == "_index" or rel in linked:
+        parts = path.relative_to(vault_root).with_suffix("").parts
+        rel = "/".join(parts)
+        if rel == "_index" or rel in linked or "attic" in parts:
             continue
         try:
             note = load_note_in_vault(path, vault_root, project=project)

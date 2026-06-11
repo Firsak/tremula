@@ -433,6 +433,10 @@ def run_distill(
         applied = distill(events, vault, provider, prompt_budget=prompt_budget,
                           judge_distilled=judge_distilled)
         save_distill_state(session_file, offset=new_offset, last_run=time.time())
+        # Every Nth productive run, append a revision pass (split/merge/archive).
+        from .revise import bump_and_maybe_revise
+
+        applied += bump_and_maybe_revise(vault, provider)
         if applied and vault.project and vault.project in vault.mounts:
             # New notes must surface in _index.md without waiting for a human:
             # deterministic auto-section sync (no LLM near the index).

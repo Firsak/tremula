@@ -1,8 +1,7 @@
 ---
 depends_on:
-- memory://tremula/decisions/decision-bootstrap-predictable-module-titles-for-idempotency
 - memory://tremula/modules/tremula-bootstrap
-- memory://tremula/modules/tremula-distiller
+- memory://tremula/modules/tremula-cli
 scope: backend
 source: distilled
 type: decision
@@ -12,13 +11,14 @@ type: decision
 
 **Problem:** On large codebases, full bootstrap (module + function + convention notes via LLM) can consume prohibitive tokens. Blocking bootstrap on LLM completion time is also slow.
 
-**Decision:** `tremula bootstrap --brief` (provider=None) skips LLM entirely and generates **stubs** using only zero-LLM signals:
-- Module stubs: extracted docstrings + AST public symbols (functions, classes, exports).
-- Exact depends_on links from import graph analysis.
-- Function and convention notes skipped.
+**Decision:** `tremula bootstrap` now supports a three-tier workflow for big repos:
 
-Enrichment happens **later, automatically**: the ambient distiller's enrichment loop updates the same notes (same titles guarantee idempotent updates, not duplication) as sessions touch each module. A subsequent full `bootstrap --full` (with provider) upgrades remaining stubs to rich summaries.
+1. `tremula bootstrap --brief` (provider=None) — ZERO LLM. Generates stubs from docstrings + AST public symbols; exact `depends_on` links from import graph. Function and convention notes skipped. Returns instantly for project structure.
 
-**Why:** Token-efficient initial structure for large repos; non-blocking interactive workflow; enrichment spreads across multiple sessions' distiller runs, hiding LLM latency behind ambient maintenance.
+2. `tremula bootstrap <target> [...]` — User-chosen focus: file paths, directories, or dotted module names (e.g. `src/core/billing/`, `pkg.auth`) get full LLM treatment. Matched modules summarized; unmatched modules stay stubs. **Focused runs skip the project-wide conventions pass** (see [[decision-conventions-are-project-wide-not-per-module]]). Links span the full project graph; dangling links to unselected modules resolve later as the vault fills in.
 
-**How to apply:** Implement `--brief` flag in CLI. When set, `run_bootstrap` accepts `provider=None` and skips LLM-dependent passes. Use [[decision-bootstrap-predictable-module-titles-for-idempotency]] (same titles) so re-runs update stubs in place, and the existing ambient loop enriches them as documented in [[decision-distiller-safety]].
+3. Ambient enrichment — The distiller's enrichment loop updates stubs in place (same titles guarantee idempotency) as sessions touch each module. A later full `tremula bootstrap` (with provider) upgrades remaining stubs.
+
+**Why:** Token-efficient initial structure for large repos; user controls where to invest LLM first; non-blocking workflow; enrichment spreads across sessions' distiller runs, hiding latency. Tested on real code: `tremula bootstrap src/tremula/contracts.py` enriched one module with accurate notes and correct deps.
+
+**How to apply:** CLI bootstrap accepts optional positional targets. When set, `run_bootstrap` uses `only=<targets>` to filter the plan. When `provider=None` (--brief), skip LLM regardless of targets.

@@ -200,13 +200,21 @@ class VaultService:
 
     # ---- reads --------------------------------------------------------------
 
-    def read_note(self, uri: str) -> dict:
-        """Return a note's metadata + body, or raise if outside the mount set."""
+    def read_note(self, uri: str, track: bool = True) -> dict:
+        """Return a note's metadata + body, or raise if outside the mount set.
+
+        ``track`` bumps heat telemetry (reads/last_read) — true for user-facing
+        reads (MCP tool, get_context, attach); internal scans (distiller
+        existing-notes snapshot, revision pass) pass False so machinery doesn't
+        masquerade as usage.
+        """
         parsed = MemoryURI.parse(uri)
         path = resolve(parsed, self.mounts)  # raises MemoryURIError if out-of-set
         if not path.exists():
             raise FileNotFoundError(f"note not found: {uri}")
         note = load_note_in_vault(path, self.mounts[parsed.project], parsed.project)
+        if track:
+            self.index.touch(uri)
         return {
             "uri": str(note.uri),
             "type": note.frontmatter.type.value,
@@ -235,7 +243,7 @@ class VaultService:
         out: list[dict] = []
         for row in self.index.all_notes()[:max_notes]:
             try:
-                note = self.read_note(row["uri"])
+                note = self.read_note(row["uri"], track=False)  # machinery, not usage
             except (MemoryURIError, FileNotFoundError):
                 continue
             body = note["body"].strip()

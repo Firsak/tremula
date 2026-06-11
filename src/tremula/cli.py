@@ -171,6 +171,26 @@ def _cmd_distill(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_revise(args: argparse.Namespace) -> int:
+    """Run a revision pass (split oversized / merge dupes / archive stale)."""
+    from .revise import revise
+
+    ctx = resolve_session()
+    if not ctx.project:
+        print("no registered project for cwd; run `tremula registry init`", file=sys.stderr)
+        return 1
+    settings = load_settings()
+    index = Index(index_path(ctx.project))
+    index.rebuild(ctx.mounts)
+    vault = VaultService(ctx.mounts, index, project=ctx.project)
+    provider = None
+    if not args.dry_run:
+        provider = provider_from_config(settings.provider)
+    for line in revise(vault, provider, settings, dry_run=args.dry_run):
+        print(line)
+    return 0
+
+
 def _cmd_root_add(args: argparse.Namespace) -> int:
     """Declare a bridge vault (root) connecting member projects."""
     reg_path = default_registry_path()
@@ -266,6 +286,13 @@ def build_parser() -> argparse.ArgumentParser:
     index_rebuild = index_sub.add_parser("rebuild", help="rebuild the index from markdown")
     index_rebuild.set_defaults(func=_cmd_index)
     index_p.set_defaults(func=_cmd_index)
+
+    revise_p = sub.add_parser("revise",
+                              help="self-organize the vault: split oversized, merge "
+                                   "duplicates, archive stale (distilled notes only)")
+    revise_p.add_argument("--dry-run", action="store_true",
+                          help="list candidates with reasons; change nothing, no LLM")
+    revise_p.set_defaults(func=_cmd_revise)
 
     root_p = sub.add_parser("root", help="bridge-vault (root) operations")
     root_sub = root_p.add_subparsers(dest="root_command", required=True)
