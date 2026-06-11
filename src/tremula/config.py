@@ -72,6 +72,12 @@ class Settings(BaseModel):
     # notes. Set true to route those updates through the enrichment judge +
     # no-loss backstop too — safer, costs one extra LLM call per update.
     judge_distilled_updates: bool = False
+    # Stage 4 proactive attach (UserPromptSubmit): scoped by working context
+    # (recent file ops, git status, cwd) — never by prompt words (plan §5.3).
+    attach_notes: int = 3  # max notes attached per prompt
+    attach_max_chars: int = 1500  # hard cap on the whole attachment block
+    attach_note_chars: int = 400  # per-note body excerpt length
+    workctx_max_paths: int = 10  # how many recent file paths feed the search
 
 
 def load_settings() -> Settings:

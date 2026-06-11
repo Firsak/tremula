@@ -302,7 +302,7 @@ def test_build_prompt_drops_old_events_within_budget():
 
 def test_injection_has_no_yaml_frontmatter(vault_setup):
     vault, index, mounts = vault_setup
-    block = build_injection(mounts, "proj", index, Settings())
+    block, _uris = build_injection(mounts, "proj", index, Settings())
     assert "# Proj Index" in block
     assert "---" not in block.split("\n\n")[0]
     assert "type: index" not in block

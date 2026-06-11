@@ -20,11 +20,26 @@ import sys
 from pathlib import Path
 
 from .capture import append_event, session_file
-from .config import HOOKS_DISABLED_ENV, hooks_disabled, index_path, load_settings
+from .config import (
+    HOOKS_DISABLED_ENV,
+    hooks_disabled,
+    index_path,
+    load_settings,
+    sessions_dir,
+)
 from .distiller import should_distill
 from .index import Index
-from .injection import build_injection
+from .index_md import sync_index_auto_section
+from .injection import (
+    build_attachment,
+    build_injection,
+    load_injected,
+    record_injected,
+    save_injected,
+)
 from .registry import resolve_session
+from .vault import VaultService
+from .workctx import working_context
 
 CAPTURE_EVENTS = {"PostToolUse", "PreToolUse", "UserPromptSubmit", "Stop", "Notification"}
 DISTILL_EVENTS = {"Stop", "PreCompact", "SessionEnd"}
@@ -52,15 +67,20 @@ def _spawn_distiller(session_path: Path, project: str, trigger: str = "Stop") ->
         "TREMULA_DISTILLING": "1",
     }
     try:
-        subprocess.Popen(
-            [sys.executable, "-m", "tremula", "distill", str(session_path),
-             "--project", project, "--trigger", trigger],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            stdin=subprocess.DEVNULL,
-            start_new_session=True,  # detach from the hook's process group
-            env=env,
-        )
+        # Distiller stderr goes to a per-project log instead of the void —
+        # the only way to debug a detached background process.
+        log_path = sessions_dir(project) / "distill.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("ab") as log:
+            subprocess.Popen(
+                [sys.executable, "-m", "tremula", "distill", str(session_path),
+                 "--project", project, "--trigger", trigger],
+                stdout=subprocess.DEVNULL,
+                stderr=log,
+                stdin=subprocess.DEVNULL,
+                start_new_session=True,  # detach from the hook's process group
+                env=env,
+            )
     except Exception:
         pass
 
@@ -86,9 +106,18 @@ def run_hook(event: str, payload: dict | None = None) -> int:
 
     if event == "SessionStart":
         try:
+            # Mechanically surface any note files not yet linked in _index.md
+            # (auto-section between markers), BEFORE rebuilding and injecting —
+            # the injected index then already lists them.
+            if ctx.vault_root is not None:
+                sync_index_auto_section(ctx.vault_root, ctx.project)
             index = Index(index_path(ctx.project))
             index.rebuild(ctx.mounts)
-            block = build_injection(ctx.mounts, ctx.project, index, load_settings())
+            block, uris = build_injection(ctx.mounts, ctx.project, index, load_settings())
+            # RESET (overwrite) the dedupe sidecar: after a compact/resume the
+            # previously attached notes may be gone from context, so everything
+            # except what we inject right now becomes attachable again.
+            save_injected(session_file(ctx.project, session_id), uris)
             if block:
                 sys.stdout.write(block + "\n")
         except Exception:
@@ -97,6 +126,27 @@ def run_hook(event: str, payload: dict | None = None) -> int:
 
     if event in CAPTURE_EVENTS:
         append_event(ctx.project, session_id, event, payload)
+
+    if event == "UserPromptSubmit":
+        # Proactive attach (funnel step 3): notes scoped by the WORKING CONTEXT
+        # (recent file ops, git status, cwd) — never by prompt words. Entirely
+        # fail-silent; stdout is added to the prompt's context by Claude Code.
+        try:
+            path = session_file(ctx.project, session_id)
+            ctx_terms = working_context(path, repo_root=cwd)["terms"]
+            if ctx_terms:
+                settings = load_settings()
+                index = Index(index_path(ctx.project))
+                index.refresh(ctx.mounts)
+                vault = VaultService(ctx.mounts, index, project=ctx.project)
+                block, attached = build_attachment(
+                    vault, ctx_terms, exclude=load_injected(path), settings=settings,
+                )
+                if block:
+                    sys.stdout.write(block + "\n")
+                    record_injected(path, attached)
+        except Exception:
+            pass
 
     if event in DISTILL_EVENTS:
         # Stop fires on every assistant turn: only spawn a process when there

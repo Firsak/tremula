@@ -402,6 +402,12 @@ def run_distill(
         applied = distill(events, vault, provider, prompt_budget=prompt_budget,
                           judge_distilled=judge_distilled)
         save_distill_state(session_file, offset=new_offset, last_run=time.time())
+        if applied and vault.project and vault.project in vault.mounts:
+            # New notes must surface in _index.md without waiting for a human:
+            # deterministic auto-section sync (no LLM near the index).
+            from .index_md import sync_index_auto_section
+
+            sync_index_auto_section(vault.mounts[vault.project], vault.project)
         return applied
     finally:
         release_lock(session_file)

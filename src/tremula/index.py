@@ -35,7 +35,8 @@ CREATE TABLE IF NOT EXISTS notes (
     type    TEXT NOT NULL,
     scope   TEXT NOT NULL,
     title   TEXT NOT NULL,
-    mtime   REAL NOT NULL
+    mtime   REAL NOT NULL,
+    size    INTEGER NOT NULL DEFAULT 0
 );
 CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
     uri UNINDEXED, title, body, tokenize = 'porter unicode61'
@@ -76,6 +77,15 @@ class Index:
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA busy_timeout=5000")
         self.conn.executescript(_SCHEMA)
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """Light in-place migration — the index is a rebuildable cache, so a
+        missing column is just added (existing rows refresh on next access)."""
+        columns = {r["name"] for r in self.conn.execute("PRAGMA table_info(notes)")}
+        if "size" not in columns:
+            self.conn.execute("ALTER TABLE notes ADD COLUMN size INTEGER NOT NULL DEFAULT 0")
+            self.conn.commit()
 
     def close(self) -> None:
         self.conn.close()
@@ -88,14 +98,15 @@ class Index:
 
     # ---- writes -------------------------------------------------------------
 
-    def upsert_note(self, note: Note, body: str, mtime: float, *, commit: bool = True) -> None:
+    def upsert_note(self, note: Note, body: str, mtime: float, *,
+                    size: int = 0, commit: bool = True) -> None:
         uri = str(note.uri)
         self.delete_note(uri, commit=False)  # idempotent replace
         self.conn.execute(
-            "INSERT INTO notes(uri, project, type, scope, title, mtime) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO notes(uri, project, type, scope, title, mtime, size) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
             (uri, note.uri.project, note.frontmatter.type.value,
-             note.frontmatter.scope.value, note.title, mtime),
+             note.frontmatter.scope.value, note.title, mtime, size),
         )
         self.conn.execute(
             "INSERT INTO notes_fts(uri, title, body) VALUES (?, ?, ?)",
@@ -133,12 +144,58 @@ class Index:
                 continue
             for path in sorted(vault_root.rglob("*.md")):
                 note = load_note_in_vault(path, vault_root, project=key)
+                stat = path.stat()
                 self.upsert_note(
-                    note, body=note.body, mtime=path.stat().st_mtime, commit=False
+                    note, body=note.body, mtime=stat.st_mtime,
+                    size=stat.st_size, commit=False,
                 )
                 count += 1
         self.conn.commit()
         return count
+
+    def refresh(self, mounts: dict[str, Path]) -> int:
+        """Incremental revalidation: pull-based cache consistency.
+
+        Compares each vault file's (mtime, size) against the indexed values and
+        re-parses only what changed; rows whose files vanished are deleted.
+        This is how mid-session edits — by a human in Obsidian, another
+        session, or the distiller — become visible to queries without a full
+        rebuild or any notification channel. Returns the number of changes.
+        """
+        indexed = {
+            r["uri"]: (r["mtime"], r["size"])
+            for r in self.conn.execute("SELECT uri, mtime, size FROM notes")
+        }
+        changed = 0
+        seen: set[str] = set()
+        for key, vault_root in mounts.items():
+            vault_root = Path(vault_root)
+            if not vault_root.is_dir():
+                continue
+            for path in vault_root.rglob("*.md"):
+                rel = path.relative_to(vault_root).with_suffix("")
+                uri = f"memory://{key}/" + "/".join(rel.parts)
+                seen.add(uri)
+                try:
+                    stat = path.stat()
+                except OSError:
+                    continue  # deleted between glob and stat
+                old = indexed.get(uri)
+                if old is not None and old[0] == stat.st_mtime and old[1] == stat.st_size:
+                    continue
+                try:
+                    note = load_note_in_vault(path, vault_root, project=key)
+                except Exception:
+                    continue  # mid-write/malformed file: keep the old row for now
+                self.upsert_note(note, body=note.body, mtime=stat.st_mtime,
+                                 size=stat.st_size, commit=False)
+                changed += 1
+        for uri in set(indexed) - seen:
+            self.delete_note(uri, commit=False)
+            changed += 1
+        if changed:
+            self.conn.commit()
+        return changed
 
     # ---- reads --------------------------------------------------------------
 
@@ -165,6 +222,43 @@ class Index:
         except sqlite3.OperationalError:
             # A query FTS5 still cannot parse must degrade to "no hits", never
             # crash a tool call mid-session.
+            return []
+        return [
+            SearchHit(r["uri"], r["title"], r["type"], r["scope"], r["snippet"], r["rank"])
+            for r in rows
+        ]
+
+    def search_any(self, terms: list[str], scope: str | None = None,
+                   limit: int = 10) -> list[SearchHit]:
+        """OR-mode search: rank notes matching ANY of the terms (bm25).
+
+        Used by working-context retrieval, where terms come from file names —
+        a note rarely matches all of them, any one is a signal.
+        """
+        tokens: list[str] = []
+        for term in terms:
+            for tok in re.findall(r"\w+", term):
+                if tok not in tokens:
+                    tokens.append(tok)
+        if not tokens:
+            return []
+        fts = " OR ".join(tokens)
+        sql = (
+            "SELECT n.uri, n.title, n.type, n.scope, "
+            "       snippet(notes_fts, 2, '[', ']', ' … ', 12) AS snippet, "
+            "       bm25(notes_fts) AS rank "
+            "FROM notes_fts JOIN notes n ON n.uri = notes_fts.uri "
+            "WHERE notes_fts MATCH ? "
+        )
+        params: list = [fts]
+        if scope is not None:
+            sql += "AND n.scope = ? "
+            params.append(scope)
+        sql += "ORDER BY rank LIMIT ?"
+        params.append(limit)
+        try:
+            rows = self.conn.execute(sql, params).fetchall()
+        except sqlite3.OperationalError:
             return []
         return [
             SearchHit(r["uri"], r["title"], r["type"], r["scope"], r["snippet"], r["rank"])

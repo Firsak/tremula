@@ -78,7 +78,9 @@ class VaultService:
 
     def _reindex(self, path: Path, project: str) -> Note:
         note = load_note_in_vault(path, self.mounts[project], project=project)
-        self.index.upsert_note(note, body=note.body, mtime=path.stat().st_mtime)
+        stat = path.stat()
+        self.index.upsert_note(note, body=note.body, mtime=stat.st_mtime,
+                               size=stat.st_size)
         return note
 
     # ---- writes -------------------------------------------------------------
@@ -216,6 +218,10 @@ class VaultService:
         }
 
     def search(self, query: str, scope: str | None = None, limit: int = 10) -> list[dict]:
+        # Pull-based cache consistency: revalidate the index against the files
+        # before querying, so mid-session edits (human, other session,
+        # distiller) are visible without a rebuild or notification channel.
+        self.index.refresh(self.mounts)
         return [
             {"uri": h.uri, "title": h.title, "type": h.type, "snippet": h.snippet}
             for h in self.index.search(query, scope=scope, limit=limit)
@@ -225,6 +231,7 @@ class VaultService:
         """A compact snapshot of current notes for the distiller to read before
         writing — so it can UPDATE the right note instead of regenerating a
         thinner duplicate that clobbers by slug collision."""
+        self.index.refresh(self.mounts)
         out: list[dict] = []
         for row in self.index.all_notes()[:max_notes]:
             try:
@@ -248,6 +255,7 @@ class VaultService:
         on-demand graph-expansion core ("vectors find what you asked, the graph
         finds what you forgot to ask").
         """
+        self.index.refresh(self.mounts)
         hits = self.index.search(topic, limit=3)
         seeds = [h.uri for h in hits]
         neighbor_uris: list[str] = []

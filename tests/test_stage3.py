@@ -125,11 +125,12 @@ def test_capture_disabled(monkeypatch, vault_setup):
 
 def test_injection_has_index_and_hot_notes(vault_setup):
     vault, index, mounts = vault_setup
-    vault.write_note("Hot note", "freshly written knowledge", type="convention")
-    block = build_injection(mounts, "proj", index, Settings())
+    uri = vault.write_note("Hot note", "freshly written knowledge", type="convention")
+    block, uris = build_injection(mounts, "proj", index, Settings())
     assert "Proj Index" in block          # _index.md content
     assert "Recently updated memory" in block
     assert "Hot note" in block
+    assert "memory://proj/_index" in uris and uri in uris  # dedupe bookkeeping
 
 
 # ---- distiller (injected fake provider, no live LLM) -----------------------
