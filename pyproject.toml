@@ -12,6 +12,9 @@ dependencies = [
     "python-frontmatter>=1.1.0",
     "pyyaml>=6.0",
     "pydantic>=2.6",
+    "tree-sitter>=0.25.2",
+    "tree-sitter-python>=0.25.0",
+    "tree-sitter-typescript>=0.23.2",
 ]
 
 [project.scripts]
@@ -40,6 +43,7 @@ select = ["E", "F", "I", "UP", "B"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+norecursedirs = ["fixtures"]
 markers = [
     "live: opt-in tests that call a real LLM (skipped unless TREMULA_LIVE_TESTS=1)",
 ]

@@ -78,6 +78,10 @@ class Settings(BaseModel):
     attach_max_chars: int = 1500  # hard cap on the whole attachment block
     attach_note_chars: int = 400  # per-note body excerpt length
     workctx_max_paths: int = 10  # how many recent file paths feed the search
+    # Stage 5 bootstrap caps.
+    bootstrap_max_modules: int = 40  # one LLM call per module
+    bootstrap_functions: int = 10  # key functions (one batched LLM call)
+    bootstrap_module_src_chars: int = 6000  # source excerpt per module prompt
 
 
 def load_settings() -> Settings:

@@ -171,6 +171,37 @@ def _cmd_distill(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_bootstrap(args: argparse.Namespace) -> int:
+    """Generate the initial vault from the current project's source code."""
+    from .bootstrap import plan_bootstrap, run_bootstrap
+
+    ctx = resolve_session()
+    if not ctx.project or ctx.vault_root is None:
+        print("no registered project for cwd; run `tremula registry init`", file=sys.stderr)
+        return 1
+    settings = load_settings()
+    repo_root = Path.cwd().resolve()
+    plan = plan_bootstrap(
+        repo_root,
+        max_modules=args.max_modules or settings.bootstrap_max_modules,
+        max_functions=args.functions or settings.bootstrap_functions,
+    )
+    provider = None
+    if not args.dry_run:
+        provider = provider_from_config(settings.provider)
+    index = Index(index_path(ctx.project))
+    index.rebuild(ctx.mounts)
+    vault = VaultService(ctx.mounts, index, project=ctx.project)
+    registry = load_registry()
+    log = run_bootstrap(
+        vault, provider, plan, settings, registry=registry,
+        dry_run=args.dry_run, judge_distilled=settings.judge_distilled_updates,
+    )
+    for line in log:
+        print(line)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="tremula", description="Tremula code-memory CLI")
     parser.add_argument("--version", action="version", version=f"tremula {__version__}")
@@ -200,6 +231,15 @@ def build_parser() -> argparse.ArgumentParser:
     index_rebuild = index_sub.add_parser("rebuild", help="rebuild the index from markdown")
     index_rebuild.set_defaults(func=_cmd_index)
     index_p.set_defaults(func=_cmd_index)
+
+    boot = sub.add_parser("bootstrap", help="generate the initial vault from source code")
+    boot.add_argument("--dry-run", action="store_true",
+                      help="print the plan (modules, functions, call count); no LLM, no writes")
+    boot.add_argument("--max-modules", type=int, default=None,
+                      help="cap on module notes (default from settings: 40)")
+    boot.add_argument("--functions", type=int, default=None,
+                      help="cap on key-function notes (default from settings: 10)")
+    boot.set_defaults(func=_cmd_bootstrap)
 
     distill_p = sub.add_parser("distill", help="distill a captured session into notes")
     distill_p.add_argument("session_file", help="path to the session NDJSON file")
