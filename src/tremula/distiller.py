@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Protocol
 
 from .config import HOOKS_DISABLED_ENV, ProviderConfig
+from .memory_uri import MemoryURIError
 from .vault import VaultService
 
 HYGIENE = """\
@@ -202,22 +203,29 @@ def judge_enrichment(provider: Provider, original: str, proposed: str) -> dict:
 
 
 def _apply_write(vault: VaultService, op: dict, provider: Provider | None,
-                 applied: list[str]) -> None:
+                 applied: list[str], judge_distilled: bool = False) -> None:
     title, type_ = op["title"], op.get("type", "module")
     scope, content, links = op.get("scope", "shared"), op.get("content", ""), op.get("links")
+    uri = vault.target_uri(title, type_)
     try:
+        original_note = vault.read_note(uri)
+    except (FileNotFoundError, MemoryURIError):
+        original_note = None
+
+    # Judge an update when the target is human-authored (always) or when it is
+    # the distiller's own note and the user opted into judging those too.
+    needs_judge = original_note is not None and (
+        original_note["source"] != "distilled" or judge_distilled
+    )
+    if not needs_judge:
         uri = vault.write_note(title=title, content=content, type=type_, scope=scope,
                                links=links, source="distilled", protect=True)
         applied.append(f"write {uri}")
         return
-    except PermissionError:
-        pass  # collided with a manual note -> reason about enriching it
 
-    uri = vault.target_uri(title, type_)
     if provider is None:
-        applied.append(f"skip write {uri}: manual note, no judge available")
+        applied.append(f"skip write {uri}: existing note, no judge available")
         return
-    original_note = vault.read_note(uri)
     original = original_note["body"]
     verdict = judge_enrichment(provider, original, content)
     if verdict.get("decision") != "enrich":
@@ -227,9 +235,10 @@ def _apply_write(vault: VaultService, op: dict, provider: Provider | None,
     if not content_preserved(original, merged):
         applied.append(f"skip enrich {uri}: backstop blocked content loss")
         return
-    # Apply the judged merge. The note stays human-owned (source=manual) and
-    # keeps its original type/scope and frontmatter links — enrichment adds,
-    # it never strips metadata. Proposed links are unioned in.
+    # Apply the judged merge. The note keeps its provenance (a manual note
+    # stays human-owned; a distilled note stays distilled) and its original
+    # type/scope and frontmatter links — enrichment adds, it never strips
+    # metadata. Proposed links are unioned in.
     merged_links = {rel: list(targets) for rel, targets in original_note["links"].items()}
     for rel, targets in (links or {}).items():
         bucket = merged_links.setdefault(rel, [])
@@ -239,23 +248,25 @@ def _apply_write(vault: VaultService, op: dict, provider: Provider | None,
     vault.write_note(
         title=title, content=merged,
         type=original_note["type"], scope=original_note["scope"],
-        links=merged_links, source="manual", protect=False,
+        links=merged_links, source=original_note["source"], protect=False,
     )
     applied.append(f"enrich {uri}: {verdict.get('reason', '')}".rstrip())
 
 
-def apply_ops(vault: VaultService, ops: list[dict], provider: Provider | None = None) -> list[str]:
+def apply_ops(vault: VaultService, ops: list[dict], provider: Provider | None = None,
+              judge_distilled: bool = False) -> list[str]:
     """Apply note operations; returns a log of what changed. Bad ops are skipped.
 
     Writes that collide with a human-authored note are routed through the LLM
     judge (``provider``) which decides enrich vs reject, guarded by a no-loss
-    backstop."""
+    backstop. With ``judge_distilled``, updates to the distiller's own notes
+    take the same judged path instead of a free overwrite."""
     applied: list[str] = []
     for op in ops:
         action = op.get("action")
         try:
             if action == "write":
-                _apply_write(vault, op, provider, applied)
+                _apply_write(vault, op, provider, applied, judge_distilled=judge_distilled)
             elif action == "link":
                 vault.link_notes(op["src"], op["dst"], op["relation"])
                 applied.append(f"link {op['src']} -{op['relation']}-> {op['dst']}")
@@ -267,14 +278,14 @@ def apply_ops(vault: VaultService, ops: list[dict], provider: Provider | None = 
 
 
 def distill(events: list[dict], vault: VaultService, provider: Provider,
-            prompt_budget: int = 24000) -> list[str]:
+            prompt_budget: int = 24000, judge_distilled: bool = False) -> list[str]:
     """Run one distillation pass: events -> LLM -> applied note operations."""
     if not events:
         return []
     existing = vault.existing_notes()
     response = provider.complete(build_prompt(events, existing, budget=prompt_budget))
     ops = parse_ops(response)
-    return apply_ops(vault, ops, provider=provider)
+    return apply_ops(vault, ops, provider=provider, judge_distilled=judge_distilled)
 
 
 # ---- incremental scheduling --------------------------------------------------
@@ -376,6 +387,7 @@ def run_distill(
     provider: Provider,
     trigger: str = "Stop",
     prompt_budget: int = 24000,
+    judge_distilled: bool = False,
 ) -> list[str]:
     """Worker entry: lock, consume new events from the offset, distill, advance."""
     from .capture import read_session_since  # local import to avoid a cycle
@@ -387,7 +399,8 @@ def run_distill(
         events, new_offset = read_session_since(session_file, state.get("offset", 0))
         if not events:
             return []
-        applied = distill(events, vault, provider, prompt_budget=prompt_budget)
+        applied = distill(events, vault, provider, prompt_budget=prompt_budget,
+                          judge_distilled=judge_distilled)
         save_distill_state(session_file, offset=new_offset, last_run=time.time())
         return applied
     finally:

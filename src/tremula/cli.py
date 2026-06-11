@@ -161,6 +161,7 @@ def _cmd_distill(args: argparse.Namespace) -> int:
         applied = run_distill(
             args.session_file, vault, provider,
             trigger=args.trigger, prompt_budget=settings.distill_prompt_budget,
+            judge_distilled=settings.judge_distilled_updates,
         )
     except Exception as exc:  # detached process: log to stderr, never crash a session
         print(f"distill error: {exc}", file=sys.stderr)

@@ -68,6 +68,10 @@ class Settings(BaseModel):
     # per turn. PreCompact/SessionEnd bypass the interval (final flush).
     distill_min_interval_s: int = 600
     distill_prompt_budget: int = 24000  # max chars of session events per distill prompt
+    # By default the distiller may freely rewrite its own (source=distilled)
+    # notes. Set true to route those updates through the enrichment judge +
+    # no-loss backstop too — safer, costs one extra LLM call per update.
+    judge_distilled_updates: bool = False
 
 
 def load_settings() -> Settings:

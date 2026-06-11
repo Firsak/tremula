@@ -147,6 +147,44 @@ def test_distiller_updates_its_own_distilled_note_without_judge(vault_setup):
     assert not any("ENRICHMENT JUDGE" in p for p in provider.prompts)  # no judge needed
 
 
+def test_judge_distilled_opt_in_rejects_bad_update(vault_setup):
+    """With judge_distilled_updates on, even the distiller's own notes are guarded."""
+    vault, _ = vault_setup
+    uri = vault.write_note("Auto note", "# Auto note\n\nrich original distilled content here",
+                           type="module", source="distilled")
+    provider = ScriptedProvider(
+        ops_response=_write_op("Auto note", "thin", "module"),
+        judge_response=_judge("reject", reason="would lose content"),
+    )
+    applied = distill([{"event": "Stop", "payload": {}}], vault, provider,
+                      judge_distilled=True)
+    assert any("skip enrich" in line for line in applied)
+    assert "rich original" in vault.read_note(uri)["body"]  # untouched
+
+
+def test_judge_distilled_opt_in_applies_good_update_keeping_provenance(vault_setup):
+    vault, _ = vault_setup
+    original = "# Auto note\n\noriginal distilled fact about the indexer"
+    uri = vault.write_note("Auto note", original, type="module", source="distilled")
+    merged = original + "\n\nnew fact: rebuild is single-transaction"
+    provider = ScriptedProvider(
+        ops_response=_write_op("Auto note", "rebuild is single-transaction", "module"),
+        judge_response=_judge("enrich", merged=merged, reason="adds fact"),
+    )
+    applied = distill([{"event": "Stop", "payload": {}}], vault, provider,
+                      judge_distilled=True)
+    assert any(line.startswith(f"enrich {uri}") for line in applied)
+    note = vault.read_note(uri)
+    assert "original distilled fact" in note["body"]
+    assert "single-transaction" in note["body"]
+    assert note["source"] == "distilled"  # provenance preserved, not flipped to manual
+
+
+def test_judge_distilled_default_off_setting():
+    from tremula.config import Settings
+    assert Settings().judge_distilled_updates is False
+
+
 def test_write_note_protect_flag_direct(vault_setup):
     vault, _ = vault_setup
     uri = vault.write_note("Manual", "# Manual\n\nkeep me", type="convention")

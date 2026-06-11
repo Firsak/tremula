@@ -30,8 +30,14 @@ losing half its content.
    decides `enrich` (emitting a full merged body) or `reject`. A
    deterministic backstop (`content_preserved`, ≥85% of the original's
    significant words must survive) blocks the merge even if the judge
-   approves a lossy one. Enriched notes stay `source: manual` — the human
-   still owns them.
+   approves a lossy one. Enriched notes keep their provenance — a manual
+   note stays human-owned.
+
+Optional extension: `judge_distilled_updates: true` in `~/.tremula/config.yaml`
+routes updates to the distiller's **own** (`source: distilled`) notes through
+the same judge + backstop instead of a free overwrite. Default off (the
+distiller sees existing notes in its prompt and is trusted with its own
+output); on = stronger guarantee at one extra LLM call per update.
 
 **Why:** Blind overwrites lose knowledge; blanket bans lose enrichment. The
 judge restores the upside (the distiller can genuinely improve a note) while
