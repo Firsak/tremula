@@ -124,7 +124,27 @@ def test_distill_run_syncs_auto_section(vault_dir, tmp_path):
     assert "[[decisions/from-session]]" in (vault_dir / "_index.md").read_text()
 
 
-def test_missing_index_is_noop(tmp_path):
-    empty = tmp_path / "vault"
-    empty.mkdir()
-    assert sync_index_auto_section(empty, "proj") is False
+def test_missing_index_is_created_and_populated(tmp_path):
+    """Self-heal: a vault with no _index.md gets one (scaffold + auto-section),
+    so notes surface even when the vault was made by hand or a pre-0.1.3 init."""
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    _note(vault / "decisions" / "stray.md", "Stray decision")
+
+    assert not (vault / "_index.md").exists()
+    assert sync_index_auto_section(vault, "proj") is True
+
+    text = (vault / "_index.md").read_text()
+    assert AUTO_BEGIN in text and AUTO_END in text
+    assert "proj — memory vault" in text          # scaffold heading
+    assert "[[decisions/stray]]" in text          # the note was surfaced
+    # Idempotent once it exists: a second sync with no changes is a no-op.
+    assert sync_index_auto_section(vault, "proj") is False
+
+
+def test_empty_vault_still_gets_an_index(tmp_path):
+    """Even with zero notes, the index is created with an empty auto-section."""
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    assert sync_index_auto_section(vault, "proj") is True
+    assert (vault / "_index.md").exists()

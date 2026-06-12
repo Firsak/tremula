@@ -56,6 +56,7 @@ as later stages come online, auto-updated by the hooks/distiller loop.
 - [[conventions/python-version-and-ruff-configuration]] — Python version and ruff configuration [convention, distilled]
 - [[decisions/ast-driven-analysis-with-tree-sitter]] — AST-driven analysis with tree-sitter [decision, distilled]
 - [[decisions/contract-surgical-section-merge]] — contract-surgical-section-merge [decision, distilled]
+- [[decisions/decision-agent-agnostic-distiller-bootstrap-provider-no-vendor-default]] — Decision: Agent-agnostic distiller/bootstrap provider — no vendor default [decision, distilled]
 - [[decisions/decision-bootstrap-ast-driven-links-not-llm-inference]] — Decision: Bootstrap — AST-driven links, not LLM inference [decision, distilled]
 - [[decisions/decision-bootstrap-brief-mode-zero-llm-stubs-with-async-enrichment]] — Decision: Bootstrap --brief mode — zero-LLM stubs with async enrichment [decision, distilled]
 - [[decisions/decision-bootstrap-predictable-module-titles-for-idempotency]] — Decision: Bootstrap — predictable module titles for idempotency [decision, distilled]

@@ -52,14 +52,29 @@ def _split(text: str) -> tuple[str, str]:
     return text[:begin].rstrip() + "\n", after.lstrip("\n")
 
 
+def _starter_index(project: str) -> str:
+    """Minimal valid ``_index.md`` scaffold (frontmatter + empty auto-section)."""
+    return (
+        f"---\ntype: index\nscope: shared\n---\n\n"
+        f"# {project} — memory vault\n\n"
+        "Notes land in the auto-section below as they are written; move a link "
+        "up into a curated heading to endorse it.\n\n"
+        f"{AUTO_BEGIN}\n{AUTO_END}\n"
+    )
+
+
 def sync_index_auto_section(vault_root: str | Path, project: str) -> bool:
-    """Regenerate the auto-section; returns True if ``_index.md`` changed."""
+    """Regenerate the auto-section; returns True if ``_index.md`` changed.
+
+    Self-healing: if ``_index.md`` is missing (a vault made by hand, a pre-0.1.3
+    init, or a deleted index), it is created from a scaffold and populated. The
+    function owns the file it maintains, so every caller (bootstrap, distiller,
+    revision pass) gets a working index regardless of how the vault was set up.
+    """
     vault_root = Path(vault_root)
     index_path = vault_root / "_index.md"
-    if not index_path.exists():
-        return False  # bootstrap creates the index file; nothing to sync into
-
-    text = index_path.read_text(encoding="utf-8")
+    existed = index_path.exists()
+    text = index_path.read_text(encoding="utf-8") if existed else _starter_index(project)
     before, after = _split(text)
     linked = _linked_paths(before + after, project)
 
@@ -84,7 +99,8 @@ def sync_index_auto_section(vault_root: str | Path, project: str) -> bool:
         section = f"{AUTO_BEGIN}\n{AUTO_END}\n"
 
     new_text = before + "\n" + section + (after if not after else after.rstrip() + "\n")
-    if new_text == text:
+    if existed and new_text == text:
         return False
+    vault_root.mkdir(parents=True, exist_ok=True)
     index_path.write_text(new_text, encoding="utf-8")
     return True

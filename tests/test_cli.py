@@ -65,6 +65,22 @@ def test_registry_init_creates_vault_when_absent(tmp_path, monkeypatch, capsys):
     assert "fresh" in capsys.readouterr().out
 
 
+def test_registry_init_self_heals_vault_missing_index(tmp_path, monkeypatch, capsys):
+    """A vault dir that exists but has no _index.md (made by hand / old init) gets
+    one on `registry init` — not only on fresh creation."""
+    monkeypatch.setenv("TREMULA_HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("TREMULA_REGISTRY", raising=False)
+    repo = tmp_path / "handmade"
+    vault = repo / "tremula-vault"
+    vault.mkdir(parents=True)  # vault exists, but NO _index.md
+    monkeypatch.chdir(repo)
+
+    assert not (vault / "_index.md").exists()
+    assert main(["registry", "init"]) == 0
+    assert (vault / "_index.md").is_file()
+    assert "created" in capsys.readouterr().out
+
+
 def test_registry_init_no_create_still_requires_vault(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("TREMULA_HOME", str(tmp_path / "home"))
     monkeypatch.delenv("TREMULA_REGISTRY", raising=False)

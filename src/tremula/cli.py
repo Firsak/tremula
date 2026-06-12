@@ -91,32 +91,15 @@ def _cmd_registry(args: argparse.Namespace) -> int:
     return 0
 
 
-_STARTER_INDEX = """\
----
-type: index
-scope: shared
----
-
-# {name} — memory vault
-
-The entry point for this project's Tremula memory. Notes land in the
-auto-section below as they are written; move a link up into a curated heading
-to endorse it.
-
-Next: `tremula bootstrap --brief` to seed module notes from the source tree.
-
-<!-- tremula:auto -->
-"""
-
-
 def _cmd_registry_init(args: argparse.Namespace) -> int:
     """Register the current project, creating ``tremula-vault/`` if absent.
 
-    ``init`` is the first command a new project runs, so it bootstraps the vault
-    directory (and a starter ``_index.md``) rather than requiring the user to
-    ``mkdir`` it first — otherwise ``init`` (needs a vault) and ``bootstrap``
-    (needs registration) would deadlock. Pass ``--no-create`` to only record an
-    existing vault and fail if none is present.
+    ``init`` is the first command a new project runs, so it creates the vault
+    directory and its ``_index.md`` (deadlock-breaker: ``bootstrap`` needs
+    registration, and a registered project needs a vault). It also self-heals an
+    existing vault that is missing ``_index.md`` — e.g. one made by hand or by a
+    pre-0.1.3 init. ``--no-create`` only records an existing vault and fails if
+    none is present.
     """
     reg_path = default_registry_path()
     repo = Path.cwd().resolve()
@@ -128,7 +111,6 @@ def _cmd_registry_init(args: argparse.Namespace) -> int:
                   file=sys.stderr)
             return 1
         vault.mkdir(parents=True)
-        (vault / "_index.md").write_text(_STARTER_INDEX.format(name=repo.name))
         created = True
     # Project key: explicit --name wins, then $TREMULA_PROJECT (so .mcp.json can
     # own the name), else the repo directory basename.
@@ -165,8 +147,15 @@ def _cmd_registry_init(args: argparse.Namespace) -> int:
 
     reg_path.parent.mkdir(parents=True, exist_ok=True)
     reg_path.write_text(yaml.safe_dump(data, sort_keys=True))
+    # Ensure _index.md exists — self-heals a hand-made or pre-0.1.3 vault, and
+    # keeps index_md as the single source of the scaffold (no duplicate here).
+    from .index_md import sync_index_auto_section
+    index_added = not (vault / "_index.md").exists()
+    sync_index_auto_section(vault, name)
     if created:
         print(f"created vault {vault}")
+    elif index_added:
+        print(f"created {vault / '_index.md'}")
     print(f"registered {name!r} -> {vault}\nregistry: {reg_path}")
     return 0
 
