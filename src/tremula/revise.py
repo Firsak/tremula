@@ -23,7 +23,13 @@ from pathlib import Path
 import frontmatter
 
 from .config import Settings, load_settings, tremula_home
-from .distiller import Provider, _extract_json, content_preserved
+from .distiller import (
+    Provider,
+    _extract_json,
+    acquire_path_lock,
+    content_preserved,
+    release_path_lock,
+)
 from .index_md import sync_index_auto_section
 from .memory_uri import MemoryURI, MemoryURIError, resolve
 from .vault import VaultService
@@ -297,12 +303,34 @@ def _counter_path(project: str) -> Path:
     return tremula_home() / "index" / f"{project}.revision.json"
 
 
+def _revise_lock(project: str) -> Path:
+    return tremula_home() / "index" / f"{project}.revise.lock"
+
+
+def try_project_revise_lock(project: str) -> bool:
+    """Per-PROJECT mutual exclusion for revision passes.
+
+    The distill lock is per-session; two concurrent sessions on one project
+    could otherwise both hit their Nth run and race merges/archives over the
+    same note files. The same lock also serializes the counter update.
+    """
+    lock = _revise_lock(project)
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    return acquire_path_lock(lock)
+
+
+def release_project_revise_lock(project: str) -> None:
+    release_path_lock(_revise_lock(project))
+
+
 def bump_and_maybe_revise(vault: VaultService, provider: Provider | None) -> list[str]:
     """Called by the distill worker after each productive run: every Nth run
     appends a revision pass. Failures never break the distill itself."""
     project = vault.project
     if not project:
         return []
+    if not try_project_revise_lock(project):
+        return []  # another session's worker holds the project revision lock
     try:
         settings = load_settings()
         path = _counter_path(project)
@@ -318,3 +346,5 @@ def bump_and_maybe_revise(vault: VaultService, provider: Provider | None) -> lis
         return revise(vault, provider, settings)
     except Exception as exc:
         return [f"revision error: {exc}"]
+    finally:
+        release_project_revise_lock(project)

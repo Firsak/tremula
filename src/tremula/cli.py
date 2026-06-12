@@ -174,21 +174,28 @@ def _cmd_distill(args: argparse.Namespace) -> int:
 
 def _cmd_revise(args: argparse.Namespace) -> int:
     """Run a revision pass (split oversized / merge dupes / archive stale)."""
-    from .revise import revise
+    from .revise import release_project_revise_lock, revise, try_project_revise_lock
 
     ctx = resolve_session()
     if not ctx.project:
         print("no registered project for cwd; run `tremula registry init`", file=sys.stderr)
         return 1
-    settings = load_settings()
-    index = Index(index_path(ctx.project))
-    index.rebuild(ctx.mounts)
-    vault = VaultService(ctx.mounts, index, project=ctx.project)
-    provider = None
-    if not args.dry_run:
-        provider = provider_from_config(settings.provider)
-    for line in revise(vault, provider, settings, dry_run=args.dry_run):
-        print(line)
+    if not args.dry_run and not try_project_revise_lock(ctx.project):
+        print("a revision pass is already running for this project; try again later")
+        return 0
+    try:
+        settings = load_settings()
+        index = Index(index_path(ctx.project))
+        index.rebuild(ctx.mounts)
+        vault = VaultService(ctx.mounts, index, project=ctx.project)
+        provider = None
+        if not args.dry_run:
+            provider = provider_from_config(settings.provider)
+        for line in revise(vault, provider, settings, dry_run=args.dry_run):
+            print(line)
+    finally:
+        if not args.dry_run:
+            release_project_revise_lock(ctx.project)
     return 0
 
 

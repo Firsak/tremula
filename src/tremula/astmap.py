@@ -7,6 +7,7 @@ links between module notes come straight from this import graph.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from functools import cache
 from pathlib import Path
@@ -18,6 +19,7 @@ SKIP_DIRS = {
     "__pycache__", ".pytest_cache", ".ruff_cache", "tremula-vault", ".tremula",
     ".claude", ".omc",
 }
+TEST_DIRS = {"test", "tests"}
 EXTENSIONS = {".py": "python", ".ts": "typescript", ".tsx": "tsx"}
 
 
@@ -63,17 +65,27 @@ def _is_test_file(path: Path) -> bool:
 
 
 def scan(repo_root: str | Path) -> list[Path]:
-    """Source files worth mapping, relative to the repo root (tests/junk skipped)."""
+    """Source files worth mapping, relative to the repo root (tests/junk skipped).
+
+    Junk and test directories are PRUNED from the walk, not filtered after the
+    fact — on the big repos that ``bootstrap --brief`` targets, descending into
+    ``node_modules``/``.venv`` only to discard every entry dominates scan time.
+    """
     repo_root = Path(repo_root)
     found: list[Path] = []
-    for path in sorted(repo_root.rglob("*")):
-        if path.suffix not in EXTENSIONS or not path.is_file():
-            continue
-        rel = path.relative_to(repo_root)
-        if any(part in SKIP_DIRS for part in rel.parts) or _is_test_file(rel):
-            continue
-        found.append(rel)
-    return found
+    for dirpath, dirnames, filenames in os.walk(repo_root):
+        dirnames[:] = sorted(
+            d for d in dirnames if d not in SKIP_DIRS and d not in TEST_DIRS
+        )
+        for filename in sorted(filenames):
+            path = Path(dirpath, filename)
+            if path.suffix not in EXTENSIONS:
+                continue
+            rel = path.relative_to(repo_root)
+            if _is_test_file(rel):
+                continue
+            found.append(rel)
+    return sorted(found)
 
 
 def dotted_name(rel_path: Path) -> str:
@@ -170,17 +182,29 @@ def _ts_symbol(decl, fmap: FileMap, exported: bool) -> None:
 
 def resolve_import(raw: str, importer: FileMap, by_dotted: dict[str, FileMap]) -> str | None:
     """Map a raw import target onto a project module's dotted name, if internal."""
-    if raw.startswith("."):  # relative: python ".vault" / ts "./client"
+    if raw.startswith("."):  # relative: python ".vault" / ts "./client", "../shared"
         base = importer.dotted.split(".")[:-1]
-        cleaned = raw.lstrip("./")
-        # python relative depth: each extra leading dot beyond the first goes up
         if importer.language == "python":
+            # Each leading dot beyond the first goes up one package level.
             ups = len(raw) - len(raw.lstrip(".")) - 1
-            base = base[: len(base) - ups] if ups else base
+            if ups:
+                base = base[: len(base) - ups] if ups <= len(base) else []
             cleaned = raw.lstrip(".")
-        candidate = ".".join([*base, *cleaned.replace("/", ".").split(".")]) if cleaned \
-            else ".".join(base)
-        return candidate if candidate in by_dotted else None
+        else:
+            # TS/TSX: "./x" stays in the dir; each "../" goes up one directory.
+            rest = raw
+            while True:
+                if rest.startswith("./"):
+                    rest = rest[2:]
+                elif rest.startswith("../"):
+                    base = base[:-1]
+                    rest = rest[3:]
+                else:
+                    break
+            cleaned = rest
+        tail = [p for p in cleaned.replace("/", ".").split(".") if p] if cleaned else []
+        candidate = ".".join([*base, *tail])
+        return candidate if candidate and candidate in by_dotted else None
     dotted = raw.replace("/", ".")
     return dotted if dotted in by_dotted else None
 

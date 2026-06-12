@@ -1,5 +1,9 @@
 # Tremula
 
+[![PyPI](https://img.shields.io/pypi/v/tremula-mcp)](https://pypi.org/project/tremula-mcp/)
+[![Python](https://img.shields.io/pypi/pyversions/tremula-mcp)](https://pypi.org/project/tremula-mcp/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
 > *Populus tremuloides* — the quaking aspen. The Pando colony is thousands of
 > trunks sharing one living root system. Tremula gives your codebases the same
 > shape of memory: one knowledge graph per project, connected at the roots
@@ -70,22 +74,52 @@ section per side (`## Provider (api)` / `## Consumer (webapp)`). Each project's
 tooling can only edit its own section — so when the sides disagree, the drift
 is visible in one file instead of hidden between two repos.
 
-## Quickstart
+## Install & set up
+
+### Manually
 
 ```bash
-# install (PyPI release planned; from source for now)
-git clone https://github.com/Firsak/tremula && cd tremula && uv sync
+uv tool install tremula-mcp      # or: pip install tremula-mcp
+                                 # zero-install alternative: uvx tremula-mcp <cmd>
 
 cd ~/code/your-project
-uv run tremula registry init          # register the project
-uv run tremula bootstrap --brief      # instant zero-LLM vault; add targets later
+tremula registry init            # register the project
+tremula bootstrap --brief        # instant zero-LLM vault
+# later, deep-enrich where it matters:  tremula bootstrap src/core/
 ```
 
-For Claude Code, in your project: copy `examples/mcp.json` → `.mcp.json` (the
-MCP tools) and merge `examples/claude-settings.json` into
-`.claude/settings.json` (the ambient loop). Open `tremula-vault/` in Obsidian
-for the graph view. Machine-written notes queue in the auto-section of
-`_index.md`; moving a link up into your curated headings endorses it.
+Wire it into Claude Code, inside the project:
+
+```json
+{ "mcpServers": { "tremula": { "command": "tremula", "args": ["serve"] } } }
+```
+
+— save that as `.mcp.json` (the six memory tools). For the ambient loop
+(capture → inject → attach → distill), copy `examples/claude-settings.json`
+into `.claude/settings.json` — every hook entry just runs
+`tremula hook <Event>`. Restart the session and approve the server + hooks
+when asked.
+
+### Or ask your agent
+
+Paste this into Claude Code (or any agent with shell access) inside your
+project:
+
+> Set up Tremula code-memory here: install the `tremula-mcp` package with
+> `uv tool install tremula-mcp`, run `tremula registry init`, then
+> `tremula bootstrap --brief`. Create `.mcp.json` registering an MCP server
+> named `tremula` with stdio command `tremula serve`. In
+> `.claude/settings.json`, add hooks running `tremula hook <Event>` for
+> SessionStart, UserPromptSubmit, PostToolUse, Stop, PreCompact, and
+> SessionEnd. Then ask me to restart the session.
+
+Open `tremula-vault/` in Obsidian for the graph view. Machine-written notes
+queue in the auto-section of `_index.md`; moving a link up into your curated
+headings endorses it.
+
+Working from a source checkout instead? `git clone … && uv sync`, then use
+`uv run tremula …` and point `.mcp.json`/hook commands at `.venv/bin/tremula`
+(this repo's own `.mcp.json` shows the pattern).
 
 ## Client support
 
@@ -100,8 +134,8 @@ Core complete and self-hosting: this repository's own vault is maintained by
 Tremula, and roughly three quarters of its notes were written by the system
 while the system was being written. 220+ tests, `ruff`-clean.
 
-Roadmap: PyPI release · hybrid semantic search (sqlite-vec) · long-lived HTTP
-daemon · native file watcher.
+Roadmap: hybrid semantic search (sqlite-vec) · long-lived HTTP daemon ·
+native file watcher.
 
 ## Develop
 

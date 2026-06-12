@@ -1,6 +1,6 @@
 [project]
 name = "tremula-mcp"
-version = "0.1.1"
+version = "0.1.2"
 description = "Self-maintaining code memory for AI coding agents: an Obsidian-compatible knowledge graph of your codebase, served over MCP and auto-curated from your work sessions."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -28,6 +28,9 @@ dependencies = [
 
 [project.scripts]
 tremula = "tremula.cli:main"
+# Alias so `uvx tremula-mcp <cmd>` works literally (uvx runs the script named
+# after the package); both names invoke the same CLI.
+tremula-mcp = "tremula.cli:main"
 
 [project.optional-dependencies]
 dev = [

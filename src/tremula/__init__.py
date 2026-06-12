@@ -9,4 +9,4 @@ and distills durable knowledge in the background.
 Markdown is the source of truth; the SQLite index is a rebuildable cache.
 """
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"

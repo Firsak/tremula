@@ -65,6 +65,7 @@ as later stages come online, auto-updated by the hooks/distiller loop.
 - [[decisions/decision-trusted-publishing-via-oidc-for-pypi-releases]] — Decision: Trusted Publishing via OIDC for PyPI releases [decision, distilled]
 - [[decisions/frontmatter-based-note-metadata]] — Frontmatter-based note metadata [decision, distilled]
 - [[decisions/mcp-server-as-reactive-layer]] — MCP server as reactive layer [decision, distilled]
+- [[decisions/release-workflow-version-synchronization-and-documentation-checks]] — Release workflow: version synchronization and documentation checks [decision, distilled]
 - [[functions/tremula-astmap-scan]] — tremula.astmap.scan [function, distilled]
 - [[functions/tremula-capture-session-file]] — tremula.capture.session_file [function, distilled]
 - [[functions/tremula-config-hooks-disabled]] — tremula.config.hooks_disabled [function, distilled]

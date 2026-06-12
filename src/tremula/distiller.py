@@ -226,7 +226,9 @@ def _apply_write(vault: VaultService, op: dict, provider: Provider | None,
     scope, content, links = op.get("scope", "shared"), op.get("content", ""), op.get("links")
     uri = vault.target_uri(title, type_)
     try:
-        original_note = vault.read_note(uri)
+        # track=False: a collision check is machinery, not usage — it must not
+        # inflate heat telemetry (the stale detector would read it as demand).
+        original_note = vault.read_note(uri, track=False)
     except (FileNotFoundError, MemoryURIError):
         original_note = None
 
@@ -360,9 +362,8 @@ def _pid_alive(pid: int) -> bool:
         return False
 
 
-def acquire_lock(session_file: str | Path) -> bool:
-    """Take the per-session distill lock; break it only if the holder is dead."""
-    lock = _lock_path(session_file)
+def acquire_path_lock(lock: Path) -> bool:
+    """Take a pid lockfile; break it only if the holder process is dead."""
     for _ in range(2):
         try:
             fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
@@ -380,8 +381,17 @@ def acquire_lock(session_file: str | Path) -> bool:
     return False
 
 
+def release_path_lock(lock: Path) -> None:
+    lock.unlink(missing_ok=True)
+
+
+def acquire_lock(session_file: str | Path) -> bool:
+    """Take the per-session distill lock; break it only if the holder is dead."""
+    return acquire_path_lock(_lock_path(session_file))
+
+
 def release_lock(session_file: str | Path) -> None:
-    _lock_path(session_file).unlink(missing_ok=True)
+    release_path_lock(_lock_path(session_file))
 
 
 def should_distill(

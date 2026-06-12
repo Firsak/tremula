@@ -255,7 +255,9 @@ def run_bootstrap(
         summaries = {str(e.get("name", "")): str(e.get("summary", ""))
                      for e in data.get("functions", []) if isinstance(e, dict)}
         for fmap, name, _refs in plan.functions:
-            summary = summaries.get(name) or summaries.get(f"{fmap.dotted}.{name}")
+            # Qualified key first: two modules can export same-named functions,
+            # and the bare name would hand both the same summary.
+            summary = summaries.get(f"{fmap.dotted}.{name}") or summaries.get(name)
             if not summary:
                 continue
             try:
