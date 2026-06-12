@@ -3,8 +3,7 @@
 Tremula uses global URIs from day one instead of local Obsidian ``[[title]]``
 wikilinks, so a note in one vault (ramet or root) can reference a note in
 another vault unambiguously. Resolution to a filesystem path requires a mapping
-of project name -> vault root, which the registry provides (Stage 2). Stage 1
-ships the parser plus a single-project resolver.
+of project name -> vault root, which the registry's mount set provides.
 """
 
 from __future__ import annotations

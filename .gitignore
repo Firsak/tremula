@@ -19,6 +19,15 @@ venv/
 *.db
 .tremula-index/
 
+# Local Claude Code state (machine-specific approvals — never committed).
+# Also covered by a global git ignore on the author's machine, but the repo
+# must protect collaborators' clones on its own.
+.claude/settings.local.json
+
+# Env files (none are used; preventive — never commit credentials)
+.env
+.env.*
+
 # OMC scratch (runtime state — only .omc/specs/ is meant to be committed)
 .omc/state/
 .omc/sessions/

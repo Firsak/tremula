@@ -72,17 +72,17 @@ class Settings(BaseModel):
     # notes. Set true to route those updates through the enrichment judge +
     # no-loss backstop too — safer, costs one extra LLM call per update.
     judge_distilled_updates: bool = False
-    # Stage 4 proactive attach (UserPromptSubmit): scoped by working context
+    # Proactive attach (UserPromptSubmit): scoped by working context
     # (recent file ops, git status, cwd) — never by prompt words (plan §5.3).
     attach_notes: int = 3  # max notes attached per prompt
     attach_max_chars: int = 1500  # hard cap on the whole attachment block
     attach_note_chars: int = 400  # per-note body excerpt length
     workctx_max_paths: int = 10  # how many recent file paths feed the search
-    # Stage 5 bootstrap caps.
+    # Bootstrap caps.
     bootstrap_max_modules: int = 40  # one LLM call per module
     bootstrap_functions: int = 10  # key functions (one batched LLM call)
     bootstrap_module_src_chars: int = 6000  # source excerpt per module prompt
-    # Stage 7 self-organization (revision pass).
+    # Self-organization (revision pass).
     revision_every_n_runs: int = 5  # run a revision pass every Nth distill run
     stale_after_days: int = 14  # cold+unlinked distilled notes older than this -> archive
     revision_max_merges: int = 5  # duplicate pairs judged per revision pass (LLM cost bound)

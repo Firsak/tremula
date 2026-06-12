@@ -43,9 +43,12 @@ as later stages come online, auto-updated by the hooks/distiller loop.
 
 <!-- tremula:auto -->
 ## Unreviewed notes (auto-listed; move a link up to endorse it)
+- [[architecture/architecture-cost-structure-flat-recurring-via-the-funnel]] — Architecture: Cost structure — flat recurring via the funnel [architecture, distilled]
 - [[architecture/stage-5-bootstrap-codebase-to-vault]] — Stage 5: Bootstrap — codebase to vault [architecture, distilled]
 - [[architecture/stage-6-roots-federation]] — Stage 6: roots / federation [architecture, distilled]
 - [[architecture/stage-7-consolidation-splitting-self-organization]] — Stage 7: Consolidation / splitting (self-organization) [architecture, distilled]
+- [[architecture/stage-8-optional-enhancements-roadmap-and-trigger-conditions]] — Stage 8: Optional enhancements — roadmap and trigger conditions [architecture, distilled]
+- [[conventions/convention-pypi-token-storage-and-security]] — Convention: PyPI token storage and security [convention, distilled]
 - [[conventions/live-test-opt-in-via-marker]] — Live test opt-in via marker [convention, distilled]
 - [[conventions/python-version-and-ruff-configuration]] — Python version and ruff configuration [convention, distilled]
 - [[decisions/ast-driven-analysis-with-tree-sitter]] — AST-driven analysis with tree-sitter [decision, distilled]
@@ -58,6 +61,8 @@ as later stages come online, auto-updated by the hooks/distiller loop.
 - [[decisions/decision-conventions-are-project-wide-not-per-module]] — Decision: Conventions are project-wide, not per-module [decision, distilled]
 - [[decisions/decision-federation-rule-is-conditional-on-mounted-roots]] — Decision: Federation rule is conditional on mounted roots [decision, distilled]
 - [[decisions/decision-heat-tracking-usage-metrics-for-stale-cleanup]] — Decision: Heat tracking — usage metrics for stale cleanup [decision, distilled]
+- [[decisions/decision-public-documentation-uses-feature-names-not-internal-stages]] — Decision: Public documentation uses feature names, not internal stages [decision, distilled]
+- [[decisions/decision-trusted-publishing-via-oidc-for-pypi-releases]] — Decision: Trusted Publishing via OIDC for PyPI releases [decision, distilled]
 - [[decisions/frontmatter-based-note-metadata]] — Frontmatter-based note metadata [decision, distilled]
 - [[decisions/mcp-server-as-reactive-layer]] — MCP server as reactive layer [decision, distilled]
 - [[functions/tremula-astmap-scan]] — tremula.astmap.scan [function, distilled]

@@ -57,7 +57,7 @@ def sync_index_auto_section(vault_root: str | Path, project: str) -> bool:
     vault_root = Path(vault_root)
     index_path = vault_root / "_index.md"
     if not index_path.exists():
-        return False  # bootstrap (Stage 5) creates the index; nothing to sync into
+        return False  # bootstrap creates the index file; nothing to sync into
 
     text = index_path.read_text(encoding="utf-8")
     before, after = _split(text)

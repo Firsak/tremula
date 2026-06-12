@@ -168,7 +168,7 @@ def resolve_session(
 ) -> SessionContext:
     """Identify the current project by cwd and compute its mount set.
 
-    This is the single entry point the MCP server (Stage 3) calls at startup.
+    This is the single entry point the MCP server calls at startup.
     If no project matches the cwd, ``project`` is ``None`` and ``mounts`` is
     empty — nothing is visible.
     """

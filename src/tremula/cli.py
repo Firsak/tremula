@@ -1,9 +1,10 @@
 """The ``tremula`` command-line entry point.
 
-Stage 1 shipped the ``vault`` inspector. Stage 2 adds ``registry`` (show the
-genet and the current session's mount set) and ``registry init`` (register the
-current project). The ambient ``hook`` subcommand and the distiller land in
-Stage 3.
+Commands: ``vault`` (inspect notes) · ``registry`` / ``registry init`` /
+``root add`` (genet topology and mount sets) · ``index rebuild`` · ``serve``
+(MCP server over stdio) · ``hook <event>`` (ambient capture/injection
+dispatch) · ``distill`` (detached background worker) · ``bootstrap`` (generate
+the vault from source code) · ``revise`` (split/merge/archive janitor).
 """
 
 from __future__ import annotations

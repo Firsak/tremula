@@ -259,9 +259,9 @@ class VaultService:
     def get_context(self, topic: str, depth: int = 1, max_notes: int = 6) -> ContextResult:
         """FTS seed + graph expansion: find the topic, then pull its neighbors.
 
-        Stage 4 adds working-context scoping and proactive attach; this is the
-        on-demand graph-expansion core ("vectors find what you asked, the graph
-        finds what you forgot to ask").
+        The on-demand step of the retrieval funnel ("search finds what you
+        asked for, the graph finds what you forgot to ask"). The per-prompt
+        working-context attach lives in the hooks layer.
         """
         self.index.refresh(self.mounts)
         hits = self.index.search(topic, limit=3)

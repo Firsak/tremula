@@ -8,7 +8,8 @@ an **ambient** hooks layer.
 - Language: Python 3.12+ · MCP via FastMCP · `python-frontmatter` · stdlib
   `sqlite3` + FTS5 · PyYAML + pydantic · tooling: `uv`, `ruff`, `pytest`.
 - Source of truth: markdown in `tremula-vault/`. SQLite index is rebuildable cache.
-- Scope of this build: **Stages 1–7** (FTS5-only; HTTP/sqlite-vec/Rust = deferred Stage 8).
+- Status: **core complete** (plan stages 1–7 built, tested, dogfooded; FTS5-only).
+  Roadmap: PyPI release, sqlite-vec hybrid search, HTTP daemon, native watcher.
 
 Full spec: `.omc/specs/deep-interview-tremula.md`. Original plan (Russian, reference only):
 `~/Downloads/tremula-architecture-plan.md`.

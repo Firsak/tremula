@@ -1,5 +1,5 @@
-"""Self-organization (Stage 7): split oversized notes, merge duplicates,
-archive stale ones.
+"""Self-organization: split oversized notes, merge duplicates, archive stale
+ones.
 
 Principles, learned from hand-curating the dogfood vault:
 - Deterministic candidate detection; the LLM only CONFIRMS (merge? still

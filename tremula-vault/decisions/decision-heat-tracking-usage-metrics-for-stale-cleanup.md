@@ -1,7 +1,5 @@
 ---
-depends_on:
-- memory://tremula/architecture/stage-7-consolidation-splitting-self-organization
-scope: shared
+scope: backend
 source: distilled
 type: decision
 ---
@@ -18,11 +16,11 @@ type: decision
 
 Note becomes archive candidate **only when all three signals agree dead**. Hand-written notes are exempt regardless of heat.
 
+**Implementation — track flag:** Heat increments only on *user-facing reads*. The read_note tool and get_context accept `track=True` (default); machinery (distiller snapshots, revision pass scans) pass `track=False`. This ensures heat measures actual human consultation, not internal bookkeeping.
+
 **Why:** Heat measures *actual usage*, independent of age or relational structure. Prevents:
 - Archiving a heavily-consulted convention just because it's old.
 - Keeping an orphaned but frequently-read decision just because it's recent.
 - Treating "unlinked" as "unused" (some knowledge is accessed directly, not discovered via graph traversal).
 
-**Trade-off — heat lives in SQLite cache, not markdown:** Usage counts are runtime observations, not derivable from markdown structure. Survive normal index rebuilds (carried forward), but reset on cache deletion. Philosophically awkward (violates "markdown is source of truth"), but unavoidable: reads are telemetry, not structure. Mitigated by: archives are never deleted (move to attic), attic is human-browsable, LLM confirms before archiving.
-
-**How to apply:** Increment `reads` counter on access paths. Check three-signal committee before moving distilled note to attic. Keep hand-written notes untouched.
+**Trade-off — heat lives in SQLite cache, not markdown:** Usage counts are runtime state; deleting the cache database resets heat to zero (documented in config). Archived notes carry `archived_at` and `archived_reason` in frontmatter for human audit.
