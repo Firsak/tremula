@@ -47,6 +47,35 @@ def test_registry_init_then_show_and_vault(project, capsys):
     assert "memory://myproj/decisions/a" in out
 
 
+def test_registry_init_creates_vault_when_absent(tmp_path, monkeypatch, capsys):
+    """init bootstraps tremula-vault/ so init -> bootstrap doesn't deadlock."""
+    monkeypatch.setenv("TREMULA_HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("TREMULA_REGISTRY", raising=False)
+    repo = tmp_path / "fresh"
+    repo.mkdir()
+    monkeypatch.chdir(repo)
+
+    assert not (repo / "tremula-vault").exists()
+    assert main(["registry", "init"]) == 0
+    out = capsys.readouterr().out
+    assert "created vault" in out
+    assert (repo / "tremula-vault" / "_index.md").is_file()
+    # cwd now resolves to a registered project -> bootstrap is unblocked.
+    assert main(["registry"]) == 0
+    assert "fresh" in capsys.readouterr().out
+
+
+def test_registry_init_no_create_still_requires_vault(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("TREMULA_HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("TREMULA_REGISTRY", raising=False)
+    repo = tmp_path / "fresh2"
+    repo.mkdir()
+    monkeypatch.chdir(repo)
+    assert main(["registry", "init", "--no-create"]) == 1
+    assert "no tremula-vault/" in capsys.readouterr().err
+    assert not (repo / "tremula-vault").exists()
+
+
 def test_registry_init_refuses_overwrite_without_force(project, capsys):
     assert main(["registry", "init", "--name", "myproj"]) == 0
     capsys.readouterr()

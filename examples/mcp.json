@@ -1,9 +1,11 @@
 {
   "_comment": "Template for registering Tremula's MCP tools with Claude Code. Save as .mcp.json in your project root (or merge into an existing one) and approve the server on next session start. Assumes `tremula` is on PATH (uv tool install tremula-mcp / pip install tremula-mcp). For a source checkout, use the command form from this repo's own .mcp.json: ${CLAUDE_PROJECT_DIR:-.}/.venv/bin/tremula",
+  "_comment_project": "The env.TREMULA_PROJECT below is OPTIONAL — drop it to use the directory name as the project key. Set it to pin a stable key independent of the directory (e.g. 'webapp_frontend' instead of 'frontend'). Register the same key first: `TREMULA_PROJECT=webapp_frontend tremula registry init` (or `tremula registry init --name webapp_frontend`).",
   "mcpServers": {
     "tremula": {
       "command": "tremula",
-      "args": ["serve"]
+      "args": ["serve"],
+      "env": { "TREMULA_PROJECT": "webapp_frontend" }
     }
   }
 }

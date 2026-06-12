@@ -14,13 +14,18 @@ from pathlib import Path
 
 from tree_sitter import Language, Parser
 
+# Tremula's own always-junk default: dirs never worth mapping as code memory
+# (dependency trees, build output, caches, VCS, Tremula's own state). Framework
+# build dirs that vary per project (.next, .sst, .open-next, .turbo, …) belong
+# in a repo-root ``.tremulaignore`` — Tremula owns this policy, not git.
 SKIP_DIRS = {
     "node_modules", ".venv", "venv", ".git", "dist", "build", "out", "target",
-    "__pycache__", ".pytest_cache", ".ruff_cache", "tremula-vault", ".tremula",
-    ".claude", ".omc",
+    "__pycache__", ".pytest_cache", ".ruff_cache", ".mypy_cache",
+    "tremula-vault", ".tremula", ".claude", ".omc",
 }
 TEST_DIRS = {"test", "tests"}
 EXTENSIONS = {".py": "python", ".ts": "typescript", ".tsx": "tsx"}
+IGNORE_FILE = ".tremulaignore"
 
 
 @dataclass
@@ -64,18 +69,45 @@ def _is_test_file(path: Path) -> bool:
     )
 
 
-def scan(repo_root: str | Path) -> list[Path]:
+def read_ignore_file(repo_root: str | Path) -> set[str]:
+    """Per-project ignore: bare directory names from ``<repo>/.tremulaignore``.
+
+    Tremula's own ignore artifact — committed with the project, travels with
+    clones, no git involved. One directory name per line (not globs, matching
+    the dir-pruning model); ``#`` comments and blank lines are skipped. Missing
+    or unreadable file -> empty set.
+    """
+    path = Path(repo_root) / IGNORE_FILE
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, ValueError):
+        return set()
+    names: set[str] = set()
+    for line in text.splitlines():
+        name = line.split("#", 1)[0].strip().rstrip("/")
+        if name:
+            names.add(name)
+    return names
+
+
+def scan(repo_root: str | Path, *, extra_skip: set[str] | None = None) -> list[Path]:
     """Source files worth mapping, relative to the repo root (tests/junk skipped).
 
     Junk and test directories are PRUNED from the walk, not filtered after the
     fact — on the big repos that ``bootstrap --brief`` targets, descending into
     ``node_modules``/``.venv`` only to discard every entry dominates scan time.
+
+    Tremula owns its ignore policy, composed from three Tremula-only sources (no
+    git): the ``SKIP_DIRS`` always-junk default, the repo-root ``.tremulaignore``
+    (per-project), and ``extra_skip`` (the per-machine ``bootstrap_skip_dirs``
+    setting).
     """
     repo_root = Path(repo_root)
+    skip = SKIP_DIRS | read_ignore_file(repo_root) | set(extra_skip or ())
     found: list[Path] = []
     for dirpath, dirnames, filenames in os.walk(repo_root):
         dirnames[:] = sorted(
-            d for d in dirnames if d not in SKIP_DIRS and d not in TEST_DIRS
+            d for d in dirnames if d not in skip and d not in TEST_DIRS
         )
         for filename in sorted(filenames):
             path = Path(dirpath, filename)

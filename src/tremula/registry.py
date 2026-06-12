@@ -23,6 +23,10 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from .config import tremula_home
 
 DEFAULT_REGISTRY_ENV = "TREMULA_REGISTRY"
+# Pins which registered project a session serves, overriding cwd detection. Set
+# it in .mcp.json's env block to give a project a stable key independent of its
+# directory name (e.g. "webapp_frontend" rather than the dir basename "frontend").
+PROJECT_OVERRIDE_ENV = "TREMULA_PROJECT"
 
 
 def _expand(path: str | Path) -> Path:
@@ -174,6 +178,13 @@ def resolve_session(
     """
     registry_path = _expand(path) if path is not None else default_registry_path()
     registry = load_registry(registry_path)
-    project = registry.find_project_by_cwd(cwd)
+    # An explicit TREMULA_PROJECT pins the project (set in .mcp.json env), but
+    # only if it names a registered project; otherwise fall back to cwd so a
+    # stale or typo'd override never silently mounts nothing.
+    override = os.environ.get(PROJECT_OVERRIDE_ENV)
+    if override and override in registry.projects:
+        project: str | None = override
+    else:
+        project = registry.find_project_by_cwd(cwd)
     mounts = registry.mount_set(project) if project else {}
     return SessionContext(project=project, mounts=mounts, registry_path=registry_path)

@@ -82,6 +82,10 @@ class Settings(BaseModel):
     bootstrap_max_modules: int = 40  # one LLM call per module
     bootstrap_functions: int = 10  # key functions (one batched LLM call)
     bootstrap_module_src_chars: int = 6000  # source excerpt per module prompt
+    # Bootstrap scan pruning: a machine-wide default of extra directory names to
+    # skip, added to the always-junk SKIP_DIRS. Per-project build dirs belong in
+    # a repo-root .tremulaignore instead (committed, travels with clones).
+    bootstrap_skip_dirs: list[str] = []
     # Self-organization (revision pass).
     revision_every_n_runs: int = 5  # run a revision pass every Nth distill run
     stale_after_days: int = 14  # cold+unlinked distilled notes older than this -> archive

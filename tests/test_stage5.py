@@ -70,6 +70,31 @@ def test_scan_filters_junk_and_tests():
     assert not any(r.startswith("tests/") for r in rels)
 
 
+def test_scan_honors_tremulaignore_and_extra_skip(tmp_path):
+    """Per-project .tremulaignore and the bootstrap_skip_dirs setting both prune."""
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "main.py").write_text("x = 1\n")
+    for junk in (".next", ".sst", "generated"):
+        (tmp_path / junk).mkdir()
+        (tmp_path / junk / "f.py").write_text("y = 2\n")
+
+    # Without an ignore file, the build dirs are walked.
+    rels = [str(p) for p in scan(tmp_path)]
+    assert "app/main.py" in rels
+    assert any(r.startswith(".next/") for r in rels)
+
+    # .tremulaignore (comments + blank lines tolerated) prunes per-project dirs.
+    (tmp_path / ".tremulaignore").write_text("# build output\n.next\n.sst/\n\n")
+    rels = [str(p) for p in scan(tmp_path)]
+    assert "app/main.py" in rels
+    assert not any(r.startswith(".next/") or r.startswith(".sst/") for r in rels)
+    assert any(r.startswith("generated/") for r in rels)  # not yet ignored
+
+    # extra_skip (the machine-wide setting) composes on top.
+    rels = [str(p) for p in scan(tmp_path, extra_skip={"generated"})]
+    assert not any(r.startswith("generated/") for r in rels)
+
+
 def test_python_astmap_symbols_exports_imports():
     fmap = map_file(FIXTURE, Path("src/samplepkg/auth.py"))
     names = {s.name: s for s in fmap.symbols}

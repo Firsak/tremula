@@ -96,15 +96,19 @@ def _matches_target(fmap: FileMap, target: str) -> bool:
 
 def plan_bootstrap(repo_root: str | Path, max_modules: int = 40,
                    max_functions: int = 10,
-                   only: list[str] | None = None) -> BootstrapPlan:
+                   only: list[str] | None = None,
+                   extra_skip: set[str] | None = None) -> BootstrapPlan:
     """Deterministic planning pass — no LLM, no writes.
 
     ``only`` focuses the plan on user-chosen targets (file paths, directories,
     or dotted module names): only matching modules are summarized/stubbed,
-    while reference counting still sees the whole project.
+    while reference counting still sees the whole project. ``extra_skip`` adds
+    project-specific directory names to prune (the ``bootstrap_skip_dirs``
+    setting).
     """
     repo_root = Path(repo_root)
-    files = [map_file(repo_root, rel) for rel in scan(repo_root)]
+    files = [map_file(repo_root, rel)
+             for rel in scan(repo_root, extra_skip=extra_skip)]
     files = [f for f in files if f.loc > 2]  # skip empty stubs
     files.sort(key=lambda f: -f.loc)
     # The graph spans the whole project: a focused run still links its notes to

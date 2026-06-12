@@ -28,10 +28,12 @@ venv/
 .env
 .env.*
 
-# OMC scratch (runtime state — only .omc/specs/ is meant to be committed)
-.omc/state/
-.omc/sessions/
-.omc/project-memory.json
+# OMC scratch (runtime state — only .omc/specs/ is meant to be committed).
+# Match at any depth: OMC agents can drop a .omc/ inside subdirs (e.g. when run
+# with cwd under tremula-vault/), and that state must never be committed either.
+**/.omc/state/
+**/.omc/sessions/
+**/.omc/project-memory.json
 
 # Per-stage build progress notes (local working log, not part of the repo)
 stage-progress/

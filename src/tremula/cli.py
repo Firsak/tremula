@@ -10,6 +10,7 @@ the vault from source code) · ``revise`` (split/merge/archive janitor).
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -22,6 +23,7 @@ from .hooks import run_hook
 from .index import Index
 from .note import load_note_in_vault
 from .registry import (
+    PROJECT_OVERRIDE_ENV,
     Registry,
     RegistryError,
     default_registry_path,
@@ -89,15 +91,48 @@ def _cmd_registry(args: argparse.Namespace) -> int:
     return 0
 
 
+_STARTER_INDEX = """\
+---
+type: index
+scope: shared
+---
+
+# {name} — memory vault
+
+The entry point for this project's Tremula memory. Notes land in the
+auto-section below as they are written; move a link up into a curated heading
+to endorse it.
+
+Next: `tremula bootstrap --brief` to seed module notes from the source tree.
+
+<!-- tremula:auto -->
+"""
+
+
 def _cmd_registry_init(args: argparse.Namespace) -> int:
-    """Register the current project in the registry (non-destructive)."""
+    """Register the current project, creating ``tremula-vault/`` if absent.
+
+    ``init`` is the first command a new project runs, so it bootstraps the vault
+    directory (and a starter ``_index.md``) rather than requiring the user to
+    ``mkdir`` it first — otherwise ``init`` (needs a vault) and ``bootstrap``
+    (needs registration) would deadlock. Pass ``--no-create`` to only record an
+    existing vault and fail if none is present.
+    """
     reg_path = default_registry_path()
     repo = Path.cwd().resolve()
     vault = repo / "tremula-vault"
+    created = False
     if not vault.is_dir():
-        print(f"no tremula-vault/ in {repo}", file=sys.stderr)
-        return 1
-    name = args.name or repo.name
+        if args.no_create:
+            print(f"no tremula-vault/ in {repo} (omit --no-create to create it)",
+                  file=sys.stderr)
+            return 1
+        vault.mkdir(parents=True)
+        (vault / "_index.md").write_text(_STARTER_INDEX.format(name=repo.name))
+        created = True
+    # Project key: explicit --name wins, then $TREMULA_PROJECT (so .mcp.json can
+    # own the name), else the repo directory basename.
+    name = args.name or os.environ.get(PROJECT_OVERRIDE_ENV) or repo.name
 
     data = {}
     if reg_path.exists():
@@ -107,6 +142,18 @@ def _cmd_registry_init(args: argparse.Namespace) -> int:
         print(f"project {name!r} already registered (use --force to overwrite)",
               file=sys.stderr)
         return 1
+    # Rename: if this repo is already registered under a different key, --force
+    # replaces that entry so the cwd doesn't resolve to two competing projects.
+    repo_str, vault_str = str(repo), str(vault)
+    dupes = [k for k, p in projects.items()
+             if k != name and isinstance(p, dict)
+             and (p.get("repo") == repo_str or p.get("path") == vault_str)]
+    if dupes and not args.force:
+        print(f"this repo is already registered as {dupes[0]!r}; "
+              f"use --force to rename it to {name!r}", file=sys.stderr)
+        return 1
+    for stale in dupes:
+        del projects[stale]
     projects[name] = {"path": str(vault), "repo": str(repo)}
 
     # Validate the result before writing.
@@ -118,6 +165,8 @@ def _cmd_registry_init(args: argparse.Namespace) -> int:
 
     reg_path.parent.mkdir(parents=True, exist_ok=True)
     reg_path.write_text(yaml.safe_dump(data, sort_keys=True))
+    if created:
+        print(f"created vault {vault}")
     print(f"registered {name!r} -> {vault}\nregistry: {reg_path}")
     return 0
 
@@ -244,6 +293,7 @@ def _cmd_bootstrap(args: argparse.Namespace) -> int:
         max_modules=args.max_modules or settings.bootstrap_max_modules,
         max_functions=args.functions or settings.bootstrap_functions,
         only=args.targets or None,
+        extra_skip=set(settings.bootstrap_skip_dirs),
     )
     if args.targets and not plan.modules:
         print(f"no modules match {args.targets!r}", file=sys.stderr)
@@ -279,6 +329,8 @@ def build_parser() -> argparse.ArgumentParser:
     reg_init = reg_sub.add_parser("init", help="register the current project")
     reg_init.add_argument("--name", help="project key (defaults to repo dir name)")
     reg_init.add_argument("--force", action="store_true", help="overwrite existing entry")
+    reg_init.add_argument("--no-create", action="store_true",
+                          help="only record an existing tremula-vault/; do not create one")
     reg_init.set_defaults(func=_cmd_registry_init)
     registry.set_defaults(func=_cmd_registry)
 
