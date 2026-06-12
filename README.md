@@ -81,30 +81,61 @@ is visible in one file instead of hidden between two repos.
 
 ### Manually
 
+#### Quick start
+
+Four commands to a working vault — no API key, nothing else required:
+
 ```bash
-uv tool install tremula-mcp      # or: pip install tremula-mcp
-                                 # zero-install alternative: uvx tremula-mcp <cmd>
-
-cd ~/code/your-project
-tremula registry init            # creates tremula-vault/ + registers the project
-                                 # name it: registry init --name webapp_frontend
-
-# Big or JS/TS repo? List build-output dirs in .tremulaignore (see below) BEFORE
-# bootstrapping — otherwise they crowd real source out under the module cap.
-tremula bootstrap --brief        # instant zero-LLM vault (whole project)
-# or scope it to where the code lives:   tremula bootstrap src/ app/
-# later, deep-enrich where it matters:   tremula bootstrap src/core/
+uv tool install tremula-mcp        # install (pip install tremula-mcp also works)
+cd ~/code/your-project             # your repository
+tremula registry init             # create + register tremula-vault/
+tremula bootstrap --brief         # seed it from your code (instant, no API key)
 ```
 
-The project key defaults to the directory name. To pin a stable key (e.g.
-`webapp_frontend` rather than `frontend`), pass `--name`, or set
-`TREMULA_PROJECT` — including in `.mcp.json`'s `env` block, so the server and
-the registration agree. Re-running `registry init --name <new> --force` from a
-registered repo renames it.
+Then save a `.mcp.json` in the repo root and restart your session:
 
-`bootstrap` prunes `node_modules`, `.venv`, build output, and Tremula's own
-state by default. For project-specific build dirs, drop a `.tremulaignore` at
-the repo root — one directory name per line, committed with the project:
+```json
+{ "mcpServers": { "tremula": { "command": "tremula", "args": ["serve"] } } }
+```
+
+That's the reactive loop live — your agent now has the six memory tools. For
+richer seeding, a stable project name, build-dir filtering, or the ambient
+auto-distill loop, follow the full setup below.
+
+#### Full setup
+
+**1 · Install**
+
+```bash
+uv tool install tremula-mcp        # or: pip install tremula-mcp
+                                   # zero-install: uvx tremula-mcp <cmd>
+```
+
+**2 · Register the project**
+
+```bash
+cd ~/code/your-project
+tremula registry init
+```
+
+Creates `tremula-vault/` (with its `_index.md`) and registers the repo. The
+project key defaults to the directory name — to pin a stable one (e.g.
+`webapp_frontend` instead of `frontend`):
+
+```bash
+tremula registry init --name webapp_frontend
+```
+
+You can also set the key via the `TREMULA_PROJECT` env var (including in
+`.mcp.json`'s `env` block, so the server and the registry agree), and rename
+later with `registry init --name <new> --force`.
+
+**3 · Keep build output out** *(big or JS/TS repos)*
+
+`bootstrap` already skips `node_modules`, `.venv`, build dirs, and Tremula's own
+state. For framework build output, add a `.tremulaignore` at the repo root —
+one directory name per line — *before* seeding, so artifacts don't crowd real
+source out of the vault:
 
 ```
 .next
@@ -115,17 +146,37 @@ the repo root — one directory name per line, committed with the project:
 (A machine-wide default is also available via `bootstrap_skip_dirs` in
 `~/.tremula/config.yaml`.)
 
-Wire it into Claude Code, inside the project:
+**4 · Seed the vault — brief, full, or partial**
+
+Choose how much to generate up front:
+
+| Mode | Command | What you get |
+|---|---|---|
+| **Brief** — *recommended* | `tremula bootstrap --brief` | The whole repo as stub notes from docstrings + the tree-sitter AST. **Instant, zero LLM calls, no API key.** The ambient distiller fills notes in as you work. |
+| **Full** | `tremula bootstrap` | The whole repo with one LLM call per module for richer summaries. Costs calls and time — run `tremula bootstrap --dry-run` first to preview the count. |
+| **Partial** | `tremula bootstrap src/ app/` | Only the directories you name (add `--brief` for stubs). Best for large repos and monorepos. |
+
+Deep-enrich any target later with `tremula bootstrap src/core/`. Full and partial
+runs need a model provider — Tremula auto-detects your agent CLI, see
+[Choosing the model provider](#choosing-the-model-provider); brief needs nothing.
+
+**5 · Wire the MCP server**
+
+Save this as `.mcp.json` in the repo root — it exposes the six memory tools to
+your agent:
 
 ```json
 { "mcpServers": { "tremula": { "command": "tremula", "args": ["serve"] } } }
 ```
 
-— save that as `.mcp.json` (the six memory tools). For the ambient loop
-(capture → inject → attach → distill), copy `examples/claude-settings.json`
-into `.claude/settings.json` — every hook entry just runs
-`tremula hook <Event>`. Restart the session and approve the server + hooks
-when asked.
+**6 · Add the ambient loop** *(optional, recommended)*
+
+Copy `examples/claude-settings.json` into `.claude/settings.json`. Every hook
+just runs `tremula hook <Event>`; together they capture sessions, inject the
+index, attach relevant notes, and distill durable knowledge in the background.
+
+Restart the session and approve the server + hooks when prompted. (Mute the
+ambient loop any time with `TREMULA_HOOKS_DISABLED=1`.)
 
 ### Or ask your agent
 
@@ -138,8 +189,14 @@ project:
 > 1. **Project key** — default is this directory's name (`<dir>`). Suggest a
 >    stable, unambiguous key if the dir name is generic (e.g. `webapp_frontend`
 >    rather than `frontend`).
-> 2. **Scope** — bootstrap the whole repo, or focus on specific source dirs
->    (e.g. `src/`, `app/`)? Recommend focusing for a large repo.
+> 2. **Bootstrap mode** — how should I seed the vault? Offer these three and
+>    recommend one based on repo size:
+>    - **brief** — whole repo, zero-LLM stubs (docstrings + AST), instant, no
+>      API key. The best default; the distiller enriches notes as I work.
+>    - **full** — whole repo, one LLM call per module (richer, costs calls and
+>      time). I'll show you the call count first and confirm before running it.
+>    - **partial** — only specific dirs (e.g. `src/`, `app/`), brief or full.
+>      Recommended for a large repo or monorepo.
 > 3. **Ignores** — gather build-output dir candidates two ways: read any
 >    existing ignore files (`.gitignore`, `.dockerignore`, `.npmignore`,
 >    `.eslintignore`, …) for already-declared dirs, and scan the tree for
@@ -149,8 +206,10 @@ project:
 >    keeps generated files out of the vault.
 >
 > Then, using my answers: run `tremula registry init` (add `--name <key>` if I
-> chose a custom one), then `tremula bootstrap --brief` (append the focus dirs if
-> I scoped it). Create `.mcp.json` registering an MCP server named `tremula` with
+> chose a custom one), then bootstrap in the mode I picked — `tremula bootstrap
+> --brief` (brief), `tremula bootstrap` (full, after I confirm the call count),
+> or `tremula bootstrap [--brief] <dirs>` (partial). Create `.mcp.json`
+> registering an MCP server named `tremula` with
 > stdio command `tremula serve` (add an `env.TREMULA_PROJECT` set to my key if it
 > differs from the dir name). In `.claude/settings.json`, add hooks running
 > `tremula hook <Event>` for SessionStart, UserPromptSubmit, PostToolUse, Stop,
