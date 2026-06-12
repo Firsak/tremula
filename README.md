@@ -42,8 +42,11 @@ Context overhead stays constant no matter how large the vault grows.
 | revision janitor | every 5th distill run or `tremula revise` | splits oversized notes, merges duplicates, archives stale ones |
 
 Module dependency links come from the tree-sitter import graph — computed,
-never hallucinated. The distiller's LLM is configurable (`claude -p` under a
-subscription by default; Anthropic API or a local model via one config line).
+never hallucinated. The distiller is **agent-agnostic**: by default it
+auto-detects whichever agent CLI you already have on `PATH` (`claude`, `gemini`,
+`codex`, …) and shells out to it — no API key, no vendor lock-in. Point it at a
+specific CLI, an explicit command, or the Anthropic API in one config line (see
+[Choosing the model provider](#choosing-the-model-provider)).
 
 ## Safety model
 
@@ -161,6 +164,40 @@ headings endorses it.
 Working from a source checkout instead? `git clone … && uv sync`, then use
 `uv run tremula …` and point `.mcp.json`/hook commands at `.venv/bin/tremula`
 (this repo's own `.mcp.json` shows the pattern).
+
+## Choosing the model provider
+
+Bootstrap (full mode) and the background distiller need an LLM. Tremula is
+**agent-agnostic** and ships with no vendor default — set `provider` in
+`~/.tremula/config.yaml`:
+
+```yaml
+# Default: auto-detect an agent CLI on PATH (claude / gemini / codex / …) and
+# shell out to it. No API key. If several are installed, pin one with `agent`.
+provider:
+  kind: auto
+  # agent: claude        # optional: pin when multiple CLIs are present
+
+# Pin a specific agent CLI by name:
+# provider: { kind: cli, agent: gemini }
+
+# Or run any one-shot CLI completer. "{prompt}" => prompt as an arg; omit it and
+# the prompt is piped on stdin. "{model}" => the `model` field below.
+# provider:
+#   kind: cli
+#   command: ["llm", "-m", "gpt-4o-mini", "{prompt}"]
+
+# Or the Anthropic API (the only path that needs a key):
+# provider:
+#   kind: anthropic
+#   model: claude-haiku-4-5-20251001
+#   auth_env: ANTHROPIC_API_KEY        # read from this env var
+#   # base_url: http://localhost:8080  # Anthropic-compatible local endpoint
+```
+
+`auto` needs no key — it uses whatever your installed CLI is already
+authenticated with. Only `kind: anthropic` reads `auth_env`. `bootstrap --brief`
+makes **zero** LLM calls, so it needs no provider at all.
 
 ## Client support
 

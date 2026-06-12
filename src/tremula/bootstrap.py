@@ -65,7 +65,7 @@ class BootstrapPlan:
     external_calls: list[tuple[str, str]] = field(default_factory=list)  # (dotted, url)
     focused: bool = False  # user targeted specific modules (skip project-wide passes)
 
-    def describe(self) -> list[str]:
+    def describe(self, provider: str | None = None) -> list[str]:
         lines = [f"bootstrap plan for {self.repo_root}",
                  f"  modules ({len(self.modules)}):"]
         lines += [f"    {m.dotted}  [{m.language}, {m.loc} loc, "
@@ -76,8 +76,16 @@ class BootstrapPlan:
                   for f, name, refs in self.functions]
         lines.append(f"  external calls ({len(self.external_calls)}):")
         lines += [f"    {dotted}: {url}" for dotted, url in self.external_calls]
+        n_calls = len(self.modules) + (1 if self.functions else 0) + 1
         lines.append(f"  LLM calls needed: {len(self.modules)} module + "
                      f"{1 if self.functions else 0} functions + 1 conventions")
+        # State which backend runs them + its auth, so a caller never has to
+        # guess (the CLI paths need no API key); nudge to --brief when many.
+        if provider:
+            lines.append(f"  provider: {provider}")
+        if n_calls > 12:
+            lines.append("  tip: `bootstrap --brief` makes 0 LLM calls (no key, "
+                         "instant); enrich later with `bootstrap <target>`")
         return lines
 
 
@@ -201,7 +209,10 @@ def run_bootstrap(
     conventions passes are skipped — the ambient distiller enriches the stubs
     progressively as the user works on each module.
     """
-    log: list[str] = list(plan.describe())
+    # Brief mode never calls a model; every other path (including a full-mode
+    # dry-run preview) does, so state the provider + its auth requirement.
+    provider_label = None if brief else settings.provider.describe()
+    log: list[str] = list(plan.describe(provider=provider_label))
     if dry_run:
         log.append("dry-run: no LLM calls, nothing written")
         return log

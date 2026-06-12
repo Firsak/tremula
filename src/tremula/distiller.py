@@ -11,12 +11,13 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import time
 from pathlib import Path
 from typing import Protocol
 
-from .config import HOOKS_DISABLED_ENV, ProviderConfig
+from .config import AGENT_PRESETS, HOOKS_DISABLED_ENV, ProviderConfig
 from .memory_uri import MemoryURIError
 from .vault import VaultService
 
@@ -54,29 +55,66 @@ class Provider(Protocol):
     def complete(self, prompt: str) -> str: ...
 
 
-class ClaudeCliProvider:
-    """Default provider: shells out to ``claude -p`` (uses the user's subscription)."""
+class CliProvider:
+    """Generic agent-CLI provider: run ANY one-shot CLI completer — claude,
+    gemini, codex, a local ``llm``/``ollama``, anything.
 
-    def __init__(self, model: str | None = None, timeout: int = 120):
+    The prompt is substituted into a ``{prompt}`` token if the command has one
+    (passed as an argument), otherwise piped on stdin; a ``{model}`` token is
+    replaced by ``model``. No API key — it uses whatever the CLI is already
+    authenticated with. This is what makes Tremula agent-agnostic rather than
+    tied to one vendor.
+    """
+
+    def __init__(self, command: list[str], model: str | None = None, timeout: int = 120):
+        if not command:
+            raise ValueError("CliProvider needs a non-empty command")
+        self.command = command
         self.model = model
         self.timeout = timeout
 
     def complete(self, prompt: str) -> str:
-        cmd = ["claude", "-p", "--output-format", "text"]
-        if self.model:
-            cmd += ["--model", self.model]
-        # ALWAYS mute Tremula hooks inside the headless claude: it inherits cwd
+        argv: list[str] = []
+        stdin: str | None = prompt
+        for tok in self.command:
+            if tok == "{prompt}":
+                argv.append(prompt)
+                stdin = None  # prompt goes as an arg, not stdin
+            elif tok == "{model}":
+                argv.append(self.model or "")
+            else:
+                argv.append(tok)
+        # ALWAYS mute Tremula hooks inside the nested agent CLI: it inherits cwd
         # and would otherwise fire this project's hooks itself — the second leg
         # of the fork bomb, regardless of who invoked the provider (distiller,
         # live tests, future callers).
         env = {**os.environ, HOOKS_DISABLED_ENV: "1"}
-        result = subprocess.run(
-            cmd, input=prompt, capture_output=True, text=True,
-            timeout=self.timeout, env=env,
-        )
+        try:
+            result = subprocess.run(
+                argv, input=stdin, capture_output=True, text=True,
+                timeout=self.timeout, env=env,
+            )
+        except FileNotFoundError as exc:
+            raise RuntimeError(
+                f"the `{self.command[0]}` CLI is not on PATH. Tremula's default "
+                "provider runs whatever agent CLI you have (no API key needed) — "
+                "install one (claude / gemini / codex), or set provider.kind="
+                "anthropic with an API key in ~/.tremula/config.yaml."
+            ) from exc
         if result.returncode != 0:
-            raise RuntimeError(f"claude -p failed: {result.stderr.strip()}")
+            raise RuntimeError(f"{self.command[0]} failed: {result.stderr.strip()}")
         return result.stdout
+
+
+class ClaudeCliProvider(CliProvider):
+    """Back-compat alias: the ``claude -p`` preset (kept so existing callers and
+    ``provider.kind='claude-cli'`` keep working; ``auto`` is the new default)."""
+
+    def __init__(self, model: str | None = None, timeout: int = 120):
+        cmd = ["claude", "-p", "--output-format", "text"]
+        if model:
+            cmd += ["--model", model]
+        super().__init__(cmd, model=model, timeout=timeout)
 
 
 class AnthropicProvider:
@@ -97,14 +135,67 @@ class AnthropicProvider:
         return "".join(block.text for block in msg.content if block.type == "text")
 
 
+def _preset_or_raise(agent: str) -> list[str]:
+    if agent not in AGENT_PRESETS:
+        raise RuntimeError(
+            f"unknown agent preset {agent!r}; known: {sorted(AGENT_PRESETS)}. "
+            "Use provider.kind='cli' with an explicit command for others."
+        )
+    return list(AGENT_PRESETS[agent])
+
+
+def detect_agents() -> list[str]:
+    """Known agent CLIs currently on PATH, in preset order. Pure PATH lookup."""
+    return [name for name in AGENT_PRESETS if shutil.which(name)]
+
+
+def _anthropic_or_raise(cfg: ProviderConfig) -> Provider:
+    key = os.environ.get(cfg.auth_env)
+    if not key:
+        raise RuntimeError(f"{cfg.auth_env} is unset; cannot use the anthropic provider")
+    return AnthropicProvider(model=cfg.model, base_url=cfg.base_url, api_key=key)
+
+
 def provider_from_config(cfg: ProviderConfig) -> Provider:
-    if cfg.kind == "claude-cli":
+    """Resolve a :class:`Provider` from config — agent-agnostic, no vendor default.
+
+    ``auto`` picks the single agent CLI on PATH (or the one pinned via
+    ``agent``), else the Anthropic API if a key is set. ``cli`` runs an explicit
+    ``command``/``agent``. ``anthropic`` uses the SDK. ``claude-cli`` is a
+    back-compat alias.
+    """
+    kind = cfg.kind
+    if kind == "anthropic":
+        return _anthropic_or_raise(cfg)
+    if kind == "claude-cli":  # back-compat
         return ClaudeCliProvider(model=cfg.model)
-    if cfg.kind == "anthropic":
-        key = os.environ.get(cfg.auth_env)
-        if not key:
-            raise RuntimeError(f"{cfg.auth_env} is unset; cannot use the anthropic provider")
-        return AnthropicProvider(model=cfg.model, base_url=cfg.base_url, api_key=key)
+    if kind == "cli":
+        command = cfg.command or (_preset_or_raise(cfg.agent) if cfg.agent else None)
+        if not command:
+            raise RuntimeError(
+                "provider.kind='cli' needs `command` (explicit argv) or `agent` "
+                f"(one of {sorted(AGENT_PRESETS)})."
+            )
+        return CliProvider(command, model=cfg.model)
+    if kind == "auto":
+        if cfg.agent:  # user pinned a specific agent
+            return CliProvider(_preset_or_raise(cfg.agent), model=cfg.model)
+        found = detect_agents()
+        if len(found) == 1:
+            return CliProvider(_preset_or_raise(found[0]), model=cfg.model)
+        if len(found) > 1:
+            raise RuntimeError(
+                f"multiple agent CLIs on PATH ({', '.join(found)}); pick one with "
+                "provider.agent in ~/.tremula/config.yaml, or use provider.kind="
+                "anthropic."
+            )
+        if os.environ.get(cfg.auth_env):  # no CLI, but a key is present
+            return _anthropic_or_raise(cfg)
+        raise RuntimeError(
+            "no agent CLI found on PATH (claude / gemini / codex) and "
+            f"{cfg.auth_env} is unset. Install an agent CLI, or set a provider in "
+            "~/.tremula/config.yaml."
+        )
     raise ValueError(f"unknown provider kind: {cfg.kind!r}")
 
 
