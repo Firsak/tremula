@@ -48,6 +48,7 @@ as later stages come online, auto-updated by the hooks/distiller loop.
 - [[architecture/stage-6-roots-federation]] — Stage 6: roots / federation [architecture, distilled]
 - [[architecture/stage-7-consolidation-splitting-self-organization]] — Stage 7: Consolidation / splitting (self-organization) [architecture, distilled]
 - [[architecture/stage-8-optional-enhancements-roadmap-and-trigger-conditions]] — Stage 8: Optional enhancements — roadmap and trigger conditions [architecture, distilled]
+- [[conventions/convention-dual-console-script-entry-points-tremula-and-tremula-mcp]] — Convention: Dual console-script entry points (tremula and tremula-mcp) [convention, distilled]
 - [[conventions/convention-pypi-token-storage-and-security]] — Convention: PyPI token storage and security [convention, distilled]
 - [[conventions/live-test-opt-in-via-marker]] — Live test opt-in via marker [convention, distilled]
 - [[conventions/python-version-and-ruff-configuration]] — Python version and ruff configuration [convention, distilled]

@@ -1,15 +1,35 @@
 ---
-scope: backend
-source: distilled
+scope: shared
+source: manual
 type: convention
 ---
 
-# Convention: PyPI token storage and security
+# Convention: PyPI publishing — twine + ~/.pypirc
 
-PyPI tokens are bearer credentials equivalent to passwords. Never commit them to the repository (no `.pypirc`, no env files, no `pyproject.toml`) or set them in CI secrets visible in logs.
+**Canonical local publish command:**
 
-**Token format:** `pypi-AgE...` (the entire string including the `pypi-` prefix).
+```bash
+uvx twine upload dist/*
+```
 
-**Scoping:** Use an account-scoped token for the first upload. Once the project exists on PyPI, immediately create a project-scoped token tied to the `tremula-mcp` package only and delete the account-scoped one.
+twine reads `~/.pypirc` natively and picks up the `[pypi]` token automatically.
+**`uv publish` deliberately ignores `.pypirc`** — do not use it for publishing
+unless bridging the token explicitly via `UV_PUBLISH_TOKEN` (an earlier session
+did this and it works, but it re-derives what twine does out of the box).
 
-**Local publishing (development-only):** If needed, paste at run time to avoid persisting to disk: `read -rs UV_PUBLISH_TOKEN && export UV_PUBLISH_TOKEN && uv publish && unset UV_PUBLISH_TOKEN`. Alternatively, use OS keyring via the `keyring` package (encrypted, survives reboots).
+**Credential home:** `~/.pypirc` in the HOME directory (never inside any
+repository), `[pypi]` section, `username = __token__`, `password = pypi-...`.
+Tokens are bearer credentials equivalent to passwords: never commit them, never
+put them in env files inside a repo, never echo them into logs.
+
+**Scoping:** account-scoped token only for a project's first upload; once the
+project exists on PyPI, switch to a project-scoped token (tied to
+`tremula-mcp`) and delete the account-scoped one.
+
+**CI path:** GitHub Actions releases use Trusted Publishing (OIDC) instead of
+any stored token — see [[decisions/decision-trusted-publishing-via-oidc-for-pypi-releases]].
+
+> History: two sessions gave conflicting advice (twine vs `uv publish` +
+> token-bridge) because this note originally captured only the token-handling
+> pattern, not the tool decision. Ratified by the user 2026-06-12: twine is
+> canonical for local publishes.
