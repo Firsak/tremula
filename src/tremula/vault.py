@@ -95,6 +95,10 @@ class VaultService:
         project: str | None = None,
         source: str = "manual",
         protect: bool = False,
+        status: str = "ratified",
+        confirmation_count: int = 0,
+        subject_paths: list[str] | None = None,
+        subject_symbols: list[str] | None = None,
     ) -> str:
         """Create or overwrite a note; returns its ``memory://`` URI.
 
@@ -126,7 +130,12 @@ class VaultService:
 
         path.parent.mkdir(parents=True, exist_ok=True)
         body = content if content.lstrip().startswith("#") else f"# {title}\n\n{content}"
-        post = frontmatter.Post(body, type=ntype.value, scope=scope, source=source, **links)
+        post = frontmatter.Post(
+            body, type=ntype.value, scope=scope, source=source,
+            status=status, confirmation_count=confirmation_count,
+            subject_paths=subject_paths or [], subject_symbols=subject_symbols or [],
+            **links,
+        )
         path.write_text(frontmatter.dumps(post) + "\n")
         self._reindex(path, target)
         return str(uri)
@@ -220,6 +229,10 @@ class VaultService:
             "type": note.frontmatter.type.value,
             "scope": note.frontmatter.scope.value,
             "source": note.frontmatter.source,
+            "status": note.frontmatter.status.value,
+            "confirmation_count": note.frontmatter.confirmation_count,
+            "subject_paths": note.frontmatter.subject_paths,
+            "subject_symbols": note.frontmatter.subject_symbols,
             "title": note.title,
             "links": note.frontmatter.links,
             "body": note.body,

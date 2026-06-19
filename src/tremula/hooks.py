@@ -113,7 +113,13 @@ def run_hook(event: str, payload: dict | None = None) -> int:
                 sync_index_auto_section(ctx.vault_root, ctx.project)
             index = Index(index_path(ctx.project))
             index.rebuild(ctx.mounts)
-            block, uris = build_injection(ctx.mounts, ctx.project, index, load_settings())
+            # Working-tree paths gate provisional notes. No session yet at
+            # SessionStart, so only git status contributes (NEW working_context call).
+            wc = working_context(None, repo_root=cwd)
+            block, uris = build_injection(
+                ctx.mounts, ctx.project, index, load_settings(),
+                working_paths=set(wc["paths"]),
+            )
             # RESET (overwrite) the dedupe sidecar: after a compact/resume the
             # previously attached notes may be gone from context, so everything
             # except what we inject right now becomes attachable again.
@@ -133,7 +139,8 @@ def run_hook(event: str, payload: dict | None = None) -> int:
         # fail-silent; stdout is added to the prompt's context by Claude Code.
         try:
             path = session_file(ctx.project, session_id)
-            ctx_terms = working_context(path, repo_root=cwd)["terms"]
+            wc = working_context(path, repo_root=cwd)
+            ctx_terms = wc["terms"]
             if ctx_terms:
                 settings = load_settings()
                 index = Index(index_path(ctx.project))
@@ -141,6 +148,7 @@ def run_hook(event: str, payload: dict | None = None) -> int:
                 vault = VaultService(ctx.mounts, index, project=ctx.project)
                 block, attached = build_attachment(
                     vault, ctx_terms, exclude=load_injected(path), settings=settings,
+                    working_paths=set(wc["paths"]),
                 )
                 if block:
                     sys.stdout.write(block + "\n")

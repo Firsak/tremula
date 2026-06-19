@@ -40,6 +40,7 @@ Context overhead stays constant no matter how large the vault grows.
 | `tremula bootstrap [target ...]` | wherever you choose to go deep | ~one small LLM call per module |
 | background distiller | as you work (debounced, ≥10 min apart) | one small LLM call per run |
 | revision janitor | every 5th distill run or `tremula revise` | splits oversized notes, merges duplicates, archives stale ones |
+| `tremula verify` | when you declare the checkout canonical | lists (or `--prune`s) notes whose code is truly gone — the only command that deletes or lowers trust |
 
 Module dependency links come from the tree-sitter import graph — computed,
 never hallucinated. The distiller is **agent-agnostic**: by default it
@@ -47,6 +48,26 @@ auto-detects whichever agent CLI you already have on `PATH` (`claude`, `gemini`,
 `codex`, …) and shells out to it — no API key, no vendor lock-in. Point it at a
 specific CLI, an explicit command, or the Anthropic API in one config line (see
 [Choosing the model provider](#choosing-the-model-provider)).
+
+### Memory follows your checkout, not your branch
+
+You work across many branches; your memory shouldn't bleed between them. A note
+the distiller writes while you build a feature is born **provisional** and bound
+to the code it describes (the files it touched and the symbols it names). It is
+proactively injected only when that code is actually present in your working
+tree — so a note about a half-finished feature branch never surfaces in a
+session on `main`. Each time the distiller re-observes the code present, the
+note accrues a confirmation; after a few it becomes **ratified** and is always
+eligible, ranked ahead of less-proven notes.
+
+This keys off *what you have checked out right now*, so it needs no branch
+tracking, no commit SHAs, and no PRs — Tremula stays a memory graph, not a
+versioning tool. It also degrades cleanly: with no git, or a language without a
+tree-sitter grammar, everything stays eligible as before. Suppression is
+**injection-only** — withheld notes are never deleted and remain fully
+searchable via `search`/`get_context`. Tune it in `~/.tremula/config.yaml`
+(`confirmation_threshold`, default 3; `confirmation_batch_size`; or
+`lifecycle_enabled: false` to turn the whole behavior off).
 
 ## Safety model
 
@@ -60,7 +81,11 @@ specific CLI, an explicit command, or the Anthropic API in one config line (see
   plus explicitly declared shared vaults (`roots`) — any other address is
   unresolvable, not merely filtered.
 - **Nothing is deleted.** Cleanup archives to `attic/` inside the vault, with
-  git history as the deeper tombstone.
+  git history as the deeper tombstone. Branch/working-tree state only affects
+  what is *proactively injected* (see [Memory follows your
+  checkout](#memory-follows-your-checkout-not-your-branch)) — never what is
+  stored. Trust only ever rises automatically; lowering or pruning it is the
+  explicit, opt-in `tremula verify`.
 - Hooks are fail-silent and never slow a session. Kill switch:
   `TREMULA_HOOKS_DISABLED=1`.
 
@@ -269,7 +294,7 @@ drive the same `tremula hook <event>` CLI.
 
 Core complete and self-hosting: this repository's own vault is maintained by
 Tremula, and roughly three quarters of its notes were written by the system
-while the system was being written. 220+ tests, `ruff`-clean.
+while the system was being written. 280+ tests, `ruff`-clean.
 
 Roadmap: hybrid semantic search (sqlite-vec) · long-lived HTTP daemon ·
 native file watcher.

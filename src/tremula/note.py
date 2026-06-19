@@ -1,10 +1,13 @@
 """The atomic unit of memory: one note = one fact/entity.
 
 A note is a markdown file with YAML frontmatter. Frontmatter carries the note
-``type``, its ``scope`` (for monorepo filtering), and typed relations to other
-notes expressed as ``memory://`` URIs. The markdown body is the human- and
-agent-readable content. This module parses notes via ``python-frontmatter`` and
-validates frontmatter with pydantic.
+``type``, its ``scope`` (for monorepo filtering), typed relations to other
+notes expressed as ``memory://`` URIs, and a lifecycle dimension — ``status``
+(provisional/ratified), a ``confirmation_count``, and the subject binding
+(``subject_paths`` / ``subject_symbols``) used to gate injection on working-tree
+presence. The markdown body is the human- and agent-readable content. This
+module parses notes via ``python-frontmatter`` and validates frontmatter with
+pydantic. All lifecycle fields are additive with backward-compatible defaults.
 """
 
 from __future__ import annotations
@@ -34,6 +37,15 @@ class Scope(StrEnum):
     SHARED = "shared"
 
 
+class LifecycleStatus(StrEnum):
+    # A note is born ``provisional`` (distilled) and accrues confirmations as the
+    # distiller observes its subject code present; at the threshold it becomes
+    # ``ratified``. Ratified notes are always injection-eligible; provisional ones
+    # are withheld from proactive injection when their subject code is absent.
+    PROVISIONAL = "provisional"
+    RATIFIED = "ratified"
+
+
 # Typed link relations carried in frontmatter (plan §1).
 RELATIONS = ("depends_on", "implements", "decided_in", "part_of")
 
@@ -51,6 +63,15 @@ class NoteFrontmatter(BaseModel):
     # Provenance: "manual" (human-authored, protected from the distiller) or
     # "distilled" (written by the background distiller, safe for it to update).
     source: str = "manual"
+    # Lifecycle (additive; defaults make pre-existing notes backward-compatible):
+    # missing ``status`` loads as ``ratified`` so the whole existing vault stays
+    # injection-eligible (grandfathering). Only the distiller sets ``provisional``.
+    status: LifecycleStatus = LifecycleStatus.RATIFIED
+    confirmation_count: int = 0
+    # Subject binding: the source files / dotted AST symbols this note describes.
+    # Used to gate injection on working-tree presence (provisional notes only).
+    subject_paths: list[str] = Field(default_factory=list)
+    subject_symbols: list[str] = Field(default_factory=list)
     links: dict[str, list[str]] = Field(default_factory=dict)
     extra: dict = Field(default_factory=dict)
 
@@ -101,7 +122,10 @@ def _split_links(meta: dict) -> tuple[dict[str, list[str]], dict]:
     for key, value in meta.items():
         if key in RELATIONS:
             links[key] = list(value) if isinstance(value, (list, tuple)) else [value]
-        elif key not in ("type", "scope", "source"):
+        elif key not in (
+            "type", "scope", "source",
+            "status", "confirmation_count", "subject_paths", "subject_symbols",
+        ):
             extra[key] = value
     return links, extra
 
@@ -131,6 +155,10 @@ def load_note_in_vault(path: str | Path, vault_root: str | Path, project: str) -
         type=post.metadata.get("type", NoteType.INDEX.value),
         scope=post.metadata.get("scope", Scope.SHARED.value),
         source=post.metadata.get("source", "manual"),
+        status=post.metadata.get("status", LifecycleStatus.RATIFIED.value),
+        confirmation_count=post.metadata.get("confirmation_count", 0),
+        subject_paths=list(post.metadata.get("subject_paths", []) or []),
+        subject_symbols=list(post.metadata.get("subject_symbols", []) or []),
         links=links,
         extra=extra,
     )

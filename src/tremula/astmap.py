@@ -145,6 +145,28 @@ def map_file(repo_root: str | Path, rel_path: Path) -> FileMap:
     return fmap
 
 
+def resolve_symbol(repo_root: str | Path, rel_path: str | Path, symbol_name: str) -> bool:
+    """Does ``symbol_name`` resolve in ``rel_path``'s current AST? (background-only).
+
+    Used by the distiller's confirmation pass to verify a note's subject code is
+    really present. Never raises: returns False if the file is missing, its
+    language is unsupported (no tree-sitter grammar), or parsing fails. The
+    symbol may be bare (``foo``) or dotted (``module.Class``) — only the trailing
+    segment is matched against the file's declared symbols.
+    """
+    rel_path = Path(rel_path)
+    if rel_path.suffix not in EXTENSIONS:
+        return False
+    if not (Path(repo_root) / rel_path).is_file():
+        return False
+    leaf = symbol_name.rsplit(".", 1)[-1]
+    try:
+        fmap = map_file(repo_root, rel_path)
+    except Exception:
+        return False
+    return any(sym.name == leaf for sym in fmap.symbols)
+
+
 def _walk_python(root, fmap: FileMap) -> None:
     # Module docstring: a leading expression-statement string.
     if not fmap.docstring and root.children:

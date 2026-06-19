@@ -5,19 +5,22 @@ traversal do not re-read every file. It is always reconstructable from the
 notes (``rebuild``) and is never committed to git.
 
 Three tables:
-- ``notes``     — one row per note: metadata + scope (for monorepo filtering).
+- ``notes``     — one row per note: metadata, scope (monorepo filtering), and
+                  lifecycle (status / confirmation_count / subject_paths) for
+                  the working-tree injection gate.
 - ``notes_fts`` — FTS5 full-text over title + body, keyed by ``uri``.
 - ``links``     — the typed graph: ``(src, relation, dst)`` rows from frontmatter.
 """
 
 from __future__ import annotations
 
+import json
 import re
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
-from .note import Note, load_note_in_vault
+from .note import LifecycleStatus, Note, load_note_in_vault
 
 
 def _fts_query(text: str) -> str:
@@ -27,6 +30,15 @@ def _fts_query(text: str) -> str:
     invalid FTS5 syntax and would raise OperationalError mid-tool-call.
     """
     return " ".join(re.findall(r"\w+", text))
+
+
+def _decode_paths(raw: str | None) -> list[str]:
+    """Parse the JSON-encoded ``subject_paths`` column back into a list."""
+    try:
+        val = json.loads(raw) if raw else []
+        return val if isinstance(val, list) else []
+    except (json.JSONDecodeError, TypeError):
+        return []
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS notes (
@@ -38,7 +50,10 @@ CREATE TABLE IF NOT EXISTS notes (
     mtime     REAL NOT NULL,
     size      INTEGER NOT NULL DEFAULT 0,
     reads     INTEGER NOT NULL DEFAULT 0,
-    last_read REAL NOT NULL DEFAULT 0
+    last_read REAL NOT NULL DEFAULT 0,
+    status             TEXT NOT NULL DEFAULT 'ratified',
+    confirmation_count INTEGER NOT NULL DEFAULT 0,
+    subject_paths      TEXT NOT NULL DEFAULT '[]'
 );
 CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
     uri UNINDEXED, title, body, tokenize = 'porter unicode61'
@@ -62,6 +77,9 @@ class SearchHit:
     scope: str
     snippet: str
     rank: float
+    # Lifecycle columns JOINed in so the injection gate needs no per-hit lookup.
+    status: str = "ratified"
+    subject_paths: str = "[]"
 
 
 class Index:
@@ -89,12 +107,20 @@ class Index:
             "size": "INTEGER NOT NULL DEFAULT 0",
             "reads": "INTEGER NOT NULL DEFAULT 0",
             "last_read": "REAL NOT NULL DEFAULT 0",
+            # Lifecycle: existing rows default to ratified (grandfathering).
+            "status": "TEXT NOT NULL DEFAULT 'ratified'",
+            "confirmation_count": "INTEGER NOT NULL DEFAULT 0",
+            "subject_paths": "TEXT NOT NULL DEFAULT '[]'",
         }
         changed = False
         for column, decl in additions.items():
             if column not in columns:
                 self.conn.execute(f"ALTER TABLE notes ADD COLUMN {column} {decl}")
                 changed = True
+        # The status index lives here, not in _SCHEMA: on a pre-existing DB the
+        # `notes` table predates the status column, so the index must be created
+        # only AFTER the migration above guarantees the column exists.
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_notes_status ON notes(status)")
         if changed:
             self.conn.commit()
 
@@ -135,10 +161,13 @@ class Index:
         self.delete_note(uri, commit=False)  # idempotent replace
         self.conn.execute(
             "INSERT INTO notes(uri, project, type, scope, title, mtime, size, "
-            "reads, last_read) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "reads, last_read, status, confirmation_count, subject_paths) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (uri, note.uri.project, note.frontmatter.type.value,
              note.frontmatter.scope.value, note.title, mtime, size,
-             reads, last_read),
+             reads, last_read, note.frontmatter.status.value,
+             note.frontmatter.confirmation_count,
+             json.dumps(note.frontmatter.subject_paths)),
         )
         self.conn.execute(
             "INSERT INTO notes_fts(uri, title, body) VALUES (?, ?, ?)",
@@ -252,7 +281,7 @@ class Index:
         if not fts:
             return []
         sql = (
-            "SELECT n.uri, n.title, n.type, n.scope, "
+            "SELECT n.uri, n.title, n.type, n.scope, n.status, n.subject_paths, "
             "       snippet(notes_fts, 2, '[', ']', ' … ', 12) AS snippet, "
             "       bm25(notes_fts) AS rank "
             "FROM notes_fts JOIN notes n ON n.uri = notes_fts.uri "
@@ -271,7 +300,8 @@ class Index:
             # crash a tool call mid-session.
             return []
         return [
-            SearchHit(r["uri"], r["title"], r["type"], r["scope"], r["snippet"], r["rank"])
+            SearchHit(r["uri"], r["title"], r["type"], r["scope"], r["snippet"],
+                      r["rank"], r["status"], r["subject_paths"])
             for r in rows
         ]
 
@@ -291,7 +321,7 @@ class Index:
             return []
         fts = " OR ".join(tokens)
         sql = (
-            "SELECT n.uri, n.title, n.type, n.scope, "
+            "SELECT n.uri, n.title, n.type, n.scope, n.status, n.subject_paths, "
             "       snippet(notes_fts, 2, '[', ']', ' … ', 12) AS snippet, "
             "       bm25(notes_fts) AS rank "
             "FROM notes_fts JOIN notes n ON n.uri = notes_fts.uri "
@@ -308,7 +338,8 @@ class Index:
         except sqlite3.OperationalError:
             return []
         return [
-            SearchHit(r["uri"], r["title"], r["type"], r["scope"], r["snippet"], r["rank"])
+            SearchHit(r["uri"], r["title"], r["type"], r["scope"], r["snippet"],
+                      r["rank"], r["status"], r["subject_paths"])
             for r in rows
         ]
 
@@ -337,4 +368,45 @@ class Index:
         return self.conn.execute("SELECT * FROM notes WHERE uri = ?", (uri,)).fetchone()
 
     def all_notes(self) -> list[sqlite3.Row]:
-        return list(self.conn.execute("SELECT * FROM notes ORDER BY mtime DESC"))
+        # Trust-ranked: more-confirmed notes first, then recency. This fixes the
+        # "note distilled minutes ago on a feature branch ranks #1 by mtime" leak.
+        return list(self.conn.execute(
+            "SELECT * FROM notes ORDER BY confirmation_count DESC, mtime DESC"
+        ))
+
+    def eligible_notes(self, working_paths, *,
+                       lifecycle_enabled: bool = True) -> list[sqlite3.Row]:
+        """Notes eligible for proactive injection, trust-ranked.
+
+        - ``lifecycle_enabled=False`` -> pre-feature behavior: every note, mtime-ranked.
+        - ratified notes -> always eligible.
+        - provisional notes -> eligible only when a ``subject_path`` is present in
+          ``working_paths`` (working-tree gate). A provisional note with no
+          subject binding falls through to eligible (nothing to gate on).
+
+        The single gate entry point for ``build_injection``; ordered by
+        confirmation_count DESC, mtime DESC.
+        """
+        if not lifecycle_enabled:
+            return list(self.conn.execute("SELECT * FROM notes ORDER BY mtime DESC"))
+        working = set(working_paths)
+        out: list[sqlite3.Row] = []
+        for row in self.conn.execute(
+            "SELECT * FROM notes ORDER BY confirmation_count DESC, mtime DESC"
+        ):
+            if row["status"] == LifecycleStatus.RATIFIED.value:
+                out.append(row)
+                continue
+            paths = _decode_paths(row["subject_paths"])
+            if not paths or (working & set(paths)):
+                out.append(row)
+        return out
+
+    def provisional_notes(self, limit: int) -> list[sqlite3.Row]:
+        """Provisional notes, lowest-confirmation / oldest first — the bounded
+        work-list for the distiller's background confirmation pass."""
+        return list(self.conn.execute(
+            "SELECT * FROM notes WHERE status = ? "
+            "ORDER BY confirmation_count ASC, mtime ASC LIMIT ?",
+            (LifecycleStatus.PROVISIONAL.value, limit),
+        ))

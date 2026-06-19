@@ -2,10 +2,13 @@
 
 SessionStart puts the index (an oglavlenie, not the knowledge base) plus a few
 hot notes into context. UserPromptSubmit attaches 2-3 notes scoped by the
-working context. A per-session sidecar records every URI already injected so
-nothing is pasted twice — and it is RESET on SessionStart, because after a
-compact/resume previously-injected notes may have been squeezed out of context
-and must become attachable again.
+working context. Both surfaces apply the note-lifecycle gate: a provisional
+note whose subject code is absent from the working tree is withheld, while
+ratified notes are always eligible and eligible notes are trust-ranked
+(see :func:`_is_eligible` / ``index.eligible_notes``). A per-session sidecar
+records every URI already injected so nothing is pasted twice — and it is RESET
+on SessionStart, because after a compact/resume previously-injected notes may
+have been squeezed out of context and must become attachable again.
 """
 
 from __future__ import annotations
@@ -18,7 +21,24 @@ import frontmatter
 from .config import Settings
 from .index import Index
 from .memory_uri import MemoryURIError
+from .note import LifecycleStatus
 from .vault import VaultService
+
+
+def _is_eligible(hit, working_paths: set[str], lifecycle_enabled: bool = True) -> bool:
+    """Injection gate for one search hit, reading the lifecycle columns carried
+    on the hit (no extra query). Ratified notes are always eligible; provisional
+    ones only when their subject code is present in the working tree. A
+    provisional note with no subject binding falls through to eligible."""
+    if not lifecycle_enabled or hit.status == LifecycleStatus.RATIFIED.value:
+        return True
+    try:
+        paths = json.loads(hit.subject_paths) if hit.subject_paths else []
+    except (json.JSONDecodeError, TypeError):
+        paths = []
+    if not paths:
+        return True
+    return bool(set(paths) & set(working_paths))
 
 
 def build_injection(
@@ -26,10 +46,16 @@ def build_injection(
     project: str | None,
     index: Index,
     settings: Settings,
+    working_paths: set[str] | None = None,
 ) -> tuple[str, list[str]]:
-    """Assemble the SessionStart context block; returns (block, injected_uris)."""
+    """Assemble the SessionStart context block; returns (block, injected_uris).
+
+    ``working_paths`` are the files present/changed in the working tree right
+    now; provisional notes whose subject code is absent from it are withheld.
+    """
     if not project or project not in mounts:
         return "", []
+    working_paths = working_paths or set()
 
     parts: list[str] = []
     uris: list[str] = []
@@ -40,8 +66,13 @@ def build_injection(
         parts.append(post.content.strip())
         uris.append(f"memory://{project}/_index")
 
-    # Hot notes: most recently modified, excluding the index itself.
-    hot = [r for r in index.all_notes() if not r["uri"].endswith("/_index")]
+    # Hot notes: trust-ranked + working-tree-gated, excluding the index itself.
+    hot = [
+        r for r in index.eligible_notes(
+            working_paths, lifecycle_enabled=settings.lifecycle_enabled
+        )
+        if not r["uri"].endswith("/_index")
+    ]
     hot = hot[: settings.hot_notes]
     if hot:
         lines = [f"- {r['uri']} — {r['title']} [{r['type']}]" for r in hot]
@@ -89,13 +120,17 @@ def build_attachment(
     terms: list[str],
     exclude: set[str],
     settings: Settings,
+    working_paths: set[str] | None = None,
 ) -> tuple[str, list[str]]:
     """Pick up to N not-yet-injected notes matching the working context.
 
     Returns (block, attached_uris); both empty when nothing relevant is left.
+    Provisional notes whose subject code is absent from ``working_paths`` are
+    skipped (the gate reads lifecycle columns off each hit — no extra query).
     """
     if not terms:
         return "", []
+    working_paths = working_paths or set()
     hits = vault.index.search_any(terms, limit=settings.attach_notes * 4)
     chunks: list[str] = []
     attached: list[str] = []
@@ -104,6 +139,8 @@ def build_attachment(
         if len(attached) >= settings.attach_notes:
             break
         if hit.uri in exclude or hit.uri.endswith("/_index"):
+            continue
+        if not _is_eligible(hit, working_paths, settings.lifecycle_enabled):
             continue
         try:
             note = vault.read_note(hit.uri)

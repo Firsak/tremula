@@ -4,7 +4,8 @@ Commands: ``vault`` (inspect notes) · ``registry`` / ``registry init`` /
 ``root add`` (genet topology and mount sets) · ``index rebuild`` · ``serve``
 (MCP server over stdio) · ``hook <event>`` (ambient capture/injection
 dispatch) · ``distill`` (detached background worker) · ``bootstrap`` (generate
-the vault from source code) · ``revise`` (split/merge/archive janitor).
+the vault from source code) · ``revise`` (split/merge/archive janitor) ·
+``verify`` (note-lifecycle cleanup: prune/ratify/lower provisional notes).
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ from . import __version__
 from .config import index_path, load_settings, tremula_home
 from .distiller import provider_from_config, run_distill
 from .hooks import run_hook
-from .index import Index
+from .index import Index, _decode_paths
 from .note import load_note_in_vault
 from .registry import (
     PROJECT_OVERRIDE_ENV,
@@ -58,10 +59,16 @@ def _cmd_vault(args: argparse.Namespace) -> int:
         source = "cwd-fallback"
 
     notes = sorted(vault.rglob("*.md"))
+    threshold = load_settings().confirmation_threshold
     print(f"vault: {vault}  ({len(notes)} notes, project={project}, via {source})")
     for path in notes:
         note = load_note_in_vault(path, vault, project)
-        print(f"  {note.uri}  [{note.frontmatter.type.value}]  {note.title}")
+        fm = note.frontmatter
+        # Counter shown only while provisional; ratified notes (incl. grandfathered
+        # ones at count 0) display a bare [ratified].
+        tag = ("[ratified]" if fm.status.value == "ratified"
+               else f"[provisional {fm.confirmation_count}/{threshold}]")
+        print(f"  {note.uri}  [{fm.type.value}] {tag}  {note.title}")
     return 0
 
 
@@ -197,10 +204,13 @@ def _cmd_distill(args: argparse.Namespace) -> int:
         index.rebuild(mounts)
         vault = VaultService(mounts, index, project=args.project)
         provider = provider_from_config(settings.provider)
+        # The code repo (not the vault) — enables working-tree confirmation.
+        repo_root = registry.projects[args.project].repo
         applied = run_distill(
             args.session_file, vault, provider,
             trigger=args.trigger, prompt_budget=settings.distill_prompt_budget,
             judge_distilled=settings.judge_distilled_updates,
+            repo_root=repo_root,
         )
     except Exception as exc:  # detached process: log to stderr, never crash a session
         print(f"distill error: {exc}", file=sys.stderr)
@@ -234,6 +244,74 @@ def _cmd_revise(args: argparse.Namespace) -> int:
     finally:
         if not args.dry_run:
             release_project_revise_lock(ctx.project)
+    return 0
+
+
+def _set_note_status(vault: VaultService, uri: str, status: str, count: int) -> int:
+    """Rewrite a note's lifecycle fields (content preserved). The manual escape
+    hatch behind ``verify --ratify`` / ``--lower``."""
+    try:
+        note = vault.read_note(uri, track=False)
+    except Exception as exc:
+        print(f"cannot read {uri}: {exc}", file=sys.stderr)
+        return 1
+    vault.write_note(
+        title=note["title"], content=note["body"], type=note["type"],
+        scope=note["scope"], links=note["links"], source=note["source"], protect=False,
+        status=status, confirmation_count=count,
+        subject_paths=note["subject_paths"], subject_symbols=note["subject_symbols"],
+    )
+    print(f"{uri} -> {status} ({count})")
+    return 0
+
+
+def _cmd_verify(args: argparse.Namespace) -> int:
+    """Verification / cleaning pass — the ONLY path that prunes notes or lowers
+    trust. Run it when you declare the current code state canonical.
+
+    Default (``--dry-run``-style) lists provisional notes whose subject code is
+    absent from the working tree; ``--prune`` archives them to attic/;
+    ``--ratify``/``--lower`` set a single note's status by hand.
+    """
+    ctx = resolve_session()
+    if not ctx.project or ctx.vault_root is None:
+        print("no registered project for cwd; run `tremula registry init`", file=sys.stderr)
+        return 1
+    settings = load_settings()
+    index = Index(index_path(ctx.project))
+    index.rebuild(ctx.mounts)
+    vault = VaultService(ctx.mounts, index, project=ctx.project)
+
+    if args.ratify:
+        return _set_note_status(vault, args.ratify, "ratified", settings.confirmation_threshold)
+    if args.lower:
+        return _set_note_status(vault, args.lower, "provisional", 0)
+
+    registry = load_registry()
+    repo_root = registry.projects[ctx.project].repo or Path.cwd()
+    candidates: list[tuple[str, int, list[str]]] = []
+    for row in index.provisional_notes(limit=100_000):
+        paths = _decode_paths(row["subject_paths"])
+        if not paths:
+            continue  # no subject binding to judge against
+        if any((Path(repo_root) / p).is_file() for p in paths):
+            continue  # subject code present -> keep
+        candidates.append((row["uri"], row["confirmation_count"], paths))
+
+    if not candidates:
+        print("no provisional notes with absent subject code.")
+        return 0
+    for uri, count, paths in candidates:
+        print(f"[provisional {count}/{settings.confirmation_threshold}] {uri} "
+              f"-- subject_paths absent: {', '.join(paths)}")
+    if args.prune:
+        from .revise import archive_note
+        for uri, _count, _paths in candidates:
+            archive_note(vault, uri, reason="verify: subject code absent (user-declared canonical)")
+        print(f"\npruned {len(candidates)} note(s) to attic/")
+    else:
+        print(f"\n{len(candidates)} candidate(s). Re-run with --prune to archive them, "
+              "or --ratify <uri> to keep one.")
     return 0
 
 
@@ -342,6 +420,18 @@ def build_parser() -> argparse.ArgumentParser:
     revise_p.add_argument("--dry-run", action="store_true",
                           help="list candidates with reasons; change nothing, no LLM")
     revise_p.set_defaults(func=_cmd_revise)
+
+    verify_p = sub.add_parser(
+        "verify",
+        help="lifecycle cleaning: list/prune provisional notes whose subject code "
+             "is absent, or hand-set a note's trust (the only path that lowers trust)")
+    verify_p.add_argument("--prune", action="store_true",
+                          help="archive the listed notes to attic/ (recoverable, not deleted)")
+    verify_p.add_argument("--ratify", metavar="URI",
+                          help="mark one note ratified (always injection-eligible)")
+    verify_p.add_argument("--lower", metavar="URI",
+                          help="reset one note to provisional, confirmation_count=0")
+    verify_p.set_defaults(func=_cmd_verify)
 
     root_p = sub.add_parser("root", help="bridge-vault (root) operations")
     root_sub = root_p.add_subparsers(dest="root_command", required=True)
