@@ -17,7 +17,7 @@ import time
 from pathlib import Path
 from typing import Protocol
 
-from .config import AGENT_PRESETS, HOOKS_DISABLED_ENV, ProviderConfig
+from .config import AGENT_PRESETS, HOOKS_DISABLED_ENV, ProviderConfig, load_settings
 from .memory_uri import MemoryURIError
 from .vault import VaultService
 
@@ -39,11 +39,21 @@ the exact title) that keeps all original content and adds new durable facts — 
 passes through a judge that rejects any change which would lose information.
 Never propose a thinner rewrite. Only emit a write for genuinely durable knowledge.
 
+For each `write` op, also declare what code the note is ABOUT, so the system can
+tell when that code is present in the working tree:
+- `subject_paths`: the source files this note describes, relative to the repo root
+  (for a decision/convention this may be a config file; omit or leave empty if the
+  note is not about specific files).
+- `subject_symbols`: the dotted symbol names it describes (e.g. `module.ClassName`,
+  `module.function_name`); empty for non-code notes.
+Do NOT invent paths — only list files actually touched in the session.
+
 Respond with ONLY a JSON object of this shape:
 {
   "ops": [
     {"action": "write", "title": "...", "type": "decision|convention|module|function|architecture",
-     "scope": "backend|frontend|shared", "content": "markdown body", "links": {"depends_on": ["memory://..."]}},
+     "scope": "backend|frontend|shared", "content": "markdown body", "links": {"depends_on": ["memory://..."]},
+     "subject_paths": ["src/pkg/file.py"], "subject_symbols": ["pkg.file.func"]},
     {"action": "link", "src": "memory://...", "dst": "memory://...", "relation": "depends_on"}
   ]
 }
@@ -311,8 +321,19 @@ def judge_enrichment(provider: Provider, original: str, proposed: str) -> dict:
     return verdict
 
 
+def _union(existing, new) -> list[str]:
+    """Order-preserving union — extend a binding without ever dropping a member."""
+    out = list(existing or [])
+    for item in (new or []):
+        if item not in out:
+            out.append(item)
+    return out
+
+
 def _apply_write(vault: VaultService, op: dict, provider: Provider | None,
-                 applied: list[str], judge_distilled: bool = False) -> None:
+                 applied: list[str], judge_distilled: bool = False,
+                 session_paths: set[str] | None = None) -> None:
+    session_paths = session_paths or set()
     title, type_ = op["title"], op.get("type", "module")
     scope, content, links = op.get("scope", "shared"), op.get("content", ""), op.get("links")
     uri = vault.target_uri(title, type_)
@@ -323,14 +344,33 @@ def _apply_write(vault: VaultService, op: dict, provider: Provider | None,
     except (FileNotFoundError, MemoryURIError):
         original_note = None
 
+    # Subject binding for this write: keep only LLM-emitted paths actually seen
+    # this session (drops hallucinated paths); symbols pass through unfiltered.
+    new_paths = [p for p in (op.get("subject_paths") or [])
+                 if isinstance(p, str) and p in session_paths]
+    new_symbols = [s for s in (op.get("subject_symbols") or []) if isinstance(s, str)]
+
     # Judge an update when the target is human-authored (always) or when it is
     # the distiller's own note and the user opted into judging those too.
     needs_judge = original_note is not None and (
         original_note["source"] != "distilled" or judge_distilled
     )
     if not needs_judge:
+        if original_note is None:
+            # Brand-new distilled note: born provisional with its subject binding.
+            status, count = "provisional", 0
+            paths, symbols = new_paths, new_symbols
+        else:
+            # Updating the distiller's own note: preserve the monotonic lifecycle
+            # (never reset count/status on a re-distill) and extend the binding.
+            status = original_note["status"]
+            count = original_note["confirmation_count"]
+            paths = _union(original_note.get("subject_paths"), new_paths)
+            symbols = _union(original_note.get("subject_symbols"), new_symbols)
         uri = vault.write_note(title=title, content=content, type=type_, scope=scope,
-                               links=links, source="distilled", protect=True)
+                               links=links, source="distilled", protect=True,
+                               status=status, confirmation_count=count,
+                               subject_paths=paths, subject_symbols=symbols)
         applied.append(f"write {uri}")
         return
 
@@ -360,24 +400,31 @@ def _apply_write(vault: VaultService, op: dict, provider: Provider | None,
         title=title, content=merged,
         type=original_note["type"], scope=original_note["scope"],
         links=merged_links, source=original_note["source"], protect=False,
+        # Enrichment is content-only: preserve the note's lifecycle + binding.
+        status=original_note["status"],
+        confirmation_count=original_note["confirmation_count"],
+        subject_paths=_union(original_note.get("subject_paths"), new_paths),
+        subject_symbols=_union(original_note.get("subject_symbols"), new_symbols),
     )
     applied.append(f"enrich {uri}: {verdict.get('reason', '')}".rstrip())
 
 
 def apply_ops(vault: VaultService, ops: list[dict], provider: Provider | None = None,
-              judge_distilled: bool = False) -> list[str]:
+              judge_distilled: bool = False, session_paths: set[str] | None = None) -> list[str]:
     """Apply note operations; returns a log of what changed. Bad ops are skipped.
 
     Writes that collide with a human-authored note are routed through the LLM
     judge (``provider``) which decides enrich vs reject, guarded by a no-loss
     backstop. With ``judge_distilled``, updates to the distiller's own notes
-    take the same judged path instead of a free overwrite."""
+    take the same judged path instead of a free overwrite. ``session_paths``
+    validates new notes' subject bindings against files actually touched."""
     applied: list[str] = []
     for op in ops:
         action = op.get("action")
         try:
             if action == "write":
-                _apply_write(vault, op, provider, applied, judge_distilled=judge_distilled)
+                _apply_write(vault, op, provider, applied, judge_distilled=judge_distilled,
+                             session_paths=session_paths)
             elif action == "link":
                 vault.link_notes(op["src"], op["dst"], op["relation"])
                 applied.append(f"link {op['src']} -{op['relation']}-> {op['dst']}")
@@ -398,7 +445,8 @@ def apply_ops(vault: VaultService, ops: list[dict], provider: Provider | None = 
 
 
 def distill(events: list[dict], vault: VaultService, provider: Provider,
-            prompt_budget: int = 24000, judge_distilled: bool = False) -> list[str]:
+            prompt_budget: int = 24000, judge_distilled: bool = False,
+            session_paths: set[str] | None = None) -> list[str]:
     """Run one distillation pass: events -> LLM -> applied note operations."""
     if not events:
         return []
@@ -409,7 +457,90 @@ def distill(events: list[dict], vault: VaultService, provider: Provider,
         build_prompt(events, existing, budget=prompt_budget, roots=roots)
     )
     ops = parse_ops(response)
-    return apply_ops(vault, ops, provider=provider, judge_distilled=judge_distilled)
+    return apply_ops(vault, ops, provider=provider, judge_distilled=judge_distilled,
+                     session_paths=session_paths)
+
+
+# ---- working-tree confirmation -----------------------------------------------
+#
+# A distilled note is born ``provisional``. On each distill run a BOUNDED pass
+# re-checks provisional notes: if a note's subject code is observed present in
+# the working tree, its monotonic confirmation counter is bumped; at the
+# threshold it becomes ``ratified``. This is injection-scope only — it never
+# deletes a note and never lowers a count (absence is not deletion; a plain
+# branch switch must not erode trust). Real removal is the explicit
+# user-invoked ``tremula verify`` pass.
+
+
+def _check_confirmation(note: dict, repo_root: Path, session_paths: set[str]) -> bool:
+    """Per-type predicate: is this note's subject code present right now?"""
+    type_ = note["type"]
+    paths = note.get("subject_paths") or []
+    symbols = note.get("subject_symbols") or []
+    if type_ in ("function", "module"):
+        present = [p for p in paths if (repo_root / p).is_file()]
+        if not present:
+            return False
+        if not symbols:
+            return True  # path-only (no symbols recorded or no tree-sitter grammar)
+        from .astmap import resolve_symbol
+        return any(resolve_symbol(repo_root, p, sym) for p in present for sym in symbols)
+    if type_ == "convention":
+        # Marker present (coarse: any declared subject file exists). Refinable.
+        return bool(paths) and any((repo_root / p).is_file() for p in paths)
+    if type_ in ("decision", "architecture"):
+        # Re-observation: a subject path was touched in this session.
+        return bool(set(paths) & set(session_paths))
+    # contract / index / other: not auto-confirmed (born ratified).
+    return False
+
+
+def _confirm_notes(vault: VaultService, repo_root: str | Path,
+                   session_paths: set[str], settings) -> list[str]:
+    """Bounded background confirmation pass — see section header."""
+    log: list[str] = []
+    repo_root = Path(repo_root)
+    for row in vault.index.provisional_notes(limit=settings.confirmation_batch_size):
+        uri = row["uri"]
+        try:
+            note = vault.read_note(uri, track=False)
+        except (MemoryURIError, FileNotFoundError):
+            continue
+        if note["source"] != "distilled":
+            continue  # never touch human-authored notes (distiller-safety)
+        if not _check_confirmation(note, repo_root, session_paths):
+            continue
+        new_count = note["confirmation_count"] + 1
+        ratified = new_count >= settings.confirmation_threshold
+        vault.write_note(
+            title=note["title"], content=note["body"],
+            type=note["type"], scope=note["scope"], links=note["links"],
+            source="distilled", protect=False,
+            status="ratified" if ratified else "provisional",
+            confirmation_count=new_count,
+            subject_paths=note["subject_paths"], subject_symbols=note["subject_symbols"],
+        )
+        log.append(f"confirm {uri} count={new_count}"
+                   + (" -> ratified" if ratified else ""))
+    return log
+
+
+def _session_paths(session_file, events: list[dict], repo_root) -> set[str]:
+    """Reference set that validates note subject bindings. Deliberately broad —
+    the current event slice, the FULL session (offset 0), and the working tree's
+    changed files — so a note born from a late event slice still binds to code
+    touched earlier in the session (whose events a prior run already consumed)."""
+    from .capture import read_session
+    from .workctx import extract_paths_from_events, git_changed_files
+
+    paths = set(extract_paths_from_events(events, max_paths=200))
+    try:
+        paths |= set(extract_paths_from_events(read_session(session_file), max_paths=400))
+    except Exception:
+        pass
+    if repo_root is not None:
+        paths |= set(git_changed_files(repo_root))
+    return paths
 
 
 # ---- incremental scheduling --------------------------------------------------
@@ -520,8 +651,15 @@ def run_distill(
     trigger: str = "Stop",
     prompt_budget: int = 24000,
     judge_distilled: bool = False,
+    repo_root: str | Path | None = None,
 ) -> list[str]:
-    """Worker entry: lock, consume new events from the offset, distill, advance."""
+    """Worker entry: lock, consume new events from the offset, distill, advance.
+
+    ``repo_root`` (the code repo, not the vault) enables the working-tree
+    confirmation pass and subject-path validation. Without it both degrade
+    gracefully: notes still distill, bindings just bind against session events
+    alone and no confirmations accrue.
+    """
     from .capture import read_session_since  # local import to avoid a cycle
 
     if not acquire_lock(session_file):
@@ -531,13 +669,18 @@ def run_distill(
         events, new_offset = read_session_since(session_file, state.get("offset", 0))
         if not events:
             return []
+        session_paths = _session_paths(session_file, events, repo_root)
         applied = distill(events, vault, provider, prompt_budget=prompt_budget,
-                          judge_distilled=judge_distilled)
+                          judge_distilled=judge_distilled, session_paths=session_paths)
         save_distill_state(session_file, offset=new_offset, last_run=time.time())
         # Every Nth productive run, append a revision pass (split/merge/archive).
         from .revise import bump_and_maybe_revise
 
         applied += bump_and_maybe_revise(vault, provider)
+        # Background confirmation pass: ratify provisional notes whose subject
+        # code is present. Needs the code repo root; skipped gracefully without it.
+        if repo_root is not None:
+            applied += _confirm_notes(vault, repo_root, session_paths, load_settings())
         if applied and vault.project and vault.project in vault.mounts:
             # New notes must surface in _index.md without waiting for a human:
             # deterministic auto-section sync (no LLM near the index).

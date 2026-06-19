@@ -31,9 +31,18 @@ venv/
 # OMC scratch (runtime state — only .omc/specs/ is meant to be committed).
 # Match at any depth: OMC agents can drop a .omc/ inside subdirs (e.g. when run
 # with cwd under tremula-vault/), and that state must never be committed either.
+# .omc/plans/ and transient scratch specs are local working output too — only
+# the durable spec(s) under .omc/specs/ are committed; everything else is ignored.
 **/.omc/state/
 **/.omc/sessions/
 **/.omc/project-memory.json
+**/.omc/plans/
+/.omc/specs/*
+!/.omc/specs/deep-interview-tremula.md
+
+# Obsidian per-user workspace state. The vault's notes are committed; the editor
+# UI config (open panes, appearance, enabled plugins) is per-user, not the repo's.
+.obsidian/
 
 # Per-stage build progress notes (local working log, not part of the repo)
 stage-progress/

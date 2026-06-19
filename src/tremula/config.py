@@ -117,6 +117,13 @@ class Settings(BaseModel):
     attach_max_chars: int = 1500  # hard cap on the whole attachment block
     attach_note_chars: int = 400  # per-note body excerpt length
     workctx_max_paths: int = 10  # how many recent file paths feed the search
+    # Note lifecycle (working-tree grounding). A distilled note is born
+    # ``provisional`` and is withheld from proactive injection when its subject
+    # code is absent from the working tree; it ratifies after this many distiller
+    # confirmations. Injection-scope only — never deletes/rewrites the vault.
+    lifecycle_enabled: bool = True  # master toggle; False = all notes always eligible
+    confirmation_threshold: int = 3  # distiller confirmations to ratify a provisional note
+    confirmation_batch_size: int = 30  # max provisional notes the confirmation pass checks per run
     # Bootstrap caps.
     bootstrap_max_modules: int = 40  # one LLM call per module
     bootstrap_functions: int = 10  # key functions (one batched LLM call)

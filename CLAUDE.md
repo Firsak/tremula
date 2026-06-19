@@ -8,7 +8,10 @@ an **ambient** hooks layer.
 - Language: Python 3.12+ · MCP via FastMCP · `python-frontmatter` · stdlib
   `sqlite3` + FTS5 · PyYAML + pydantic · tooling: `uv`, `ruff`, `pytest`.
 - Source of truth: markdown in `tremula-vault/`. SQLite index is rebuildable cache.
-- Status: **core complete** (plan stages 1–7 built, tested, dogfooded; FTS5-only).
+- Status: **core complete** (plan stages 1–7 built, tested, dogfooded; FTS5-only)
+  plus branch-aware memory (note lifecycle + working-tree grounding: provisional→
+  ratified by distiller confirmation; injection gated on subject-code presence;
+  `tremula verify` for cleanup). See [[decisions/decision-branch-aware-memory-scoping-via-lifecycle-accrual-not-branch-identity]].
   Roadmap: PyPI release, sqlite-vec hybrid search, HTTP daemon, native watcher.
 
 Full spec: `.omc/specs/deep-interview-tremula.md`. Original plan (Russian, reference only):
